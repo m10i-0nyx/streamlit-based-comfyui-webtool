@@ -741,6 +741,16 @@ def main() -> None:
         # ネガティブプロンプトプリセット選択
         negative_preset = render_negative_prompt_presets("negative_preset")
 
+        # プリセット変更を検出してテキストエリアを更新
+        if "last_negative_preset" not in st.session_state:
+            st.session_state["last_negative_preset"] = None
+
+        if st.session_state["last_negative_preset"] != negative_preset:
+            st.session_state["last_negative_preset"] = negative_preset
+            if negative_preset is not None:
+                # プリセットが選択された場合、テキストエリアを更新
+                st.session_state["negative_prompt_input"] = negative_preset
+
         # ネガティブプロンプト入力（プリセットが選択されていればその値を使用）
         if negative_preset is not None:
             # プリセットが選択された場合
@@ -748,7 +758,6 @@ def main() -> None:
                 "ネガティブプロンプト(除外したい内容を入力)",
                 height=120,
                 placeholder="除外したい内容を入力",
-                value=negative_preset,
                 key="negative_prompt_input",
             )
         else:
