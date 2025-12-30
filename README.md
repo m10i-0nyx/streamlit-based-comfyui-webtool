@@ -17,7 +17,7 @@ uv pip install -r requirements.txt
   - `COMFYUI_WS_URL` (例: ws://localhost:8188/ws)
   - `WORKFLOW_JSON_PATH` (例: workflows/your_workflow.json)
   - `IMAGE_WIDTH` / `IMAGE_HEIGHT` (例: 512)
-  - `MAX_ACTIVE_REQUESTS` (1セッション同時リクエスト数、例: 2)
+  - `MAX_ACTIVE_REQUESTS` は廃止しました（1ユーザ・1セッションあたり同時1リクエスト固定）
   - `REQUEST_TIMEOUT_SECONDS` (例: 90)
   - `GLOBAL_MAX_ACTIVE_REQUESTS` (全体同時上限、例: 100。0 で無効)
   - `HISTORY_TTL_SECONDS` (履歴の保持期間、例: 86400)
