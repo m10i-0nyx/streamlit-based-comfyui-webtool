@@ -148,26 +148,45 @@ class TagDictionary:
         ]
         self._tag_map = {tag["name"]: tag for tag in self._tags}
 
-    def search(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+    def search(self, query: str, limit: int = 50, exclude: list[str] | None = None) -> list[dict[str, Any]]:
         """タグを検索
 
         Args:
             query: 検索クエリ
             limit: 最大返却数
+            exclude: 除外するキーワードのリスト
 
         Returns:
-            マッチしたタグのリスト
+            マッチしたタグのリスト（除外条件に一致しないもの）
         """
+        # 前後の空白を削除
+        query = query.strip()
+
         if not query:
             # クエリが空の場合は人気タグを返す
             return self._tags[:limit]
 
         query_lower = query.lower()
+        exclude_lower = [e.lower().strip() for e in (exclude or []) if e.strip()]
         results: list[dict[str, Any]] = []
 
         for tag in self._tags:
+            tag_name_lower = tag["name"].lower()
+            aliases_lower = [alias.lower() for alias in tag["aliases"]]
+
+            # 除外条件のチェック
+            if exclude_lower:
+                should_exclude = False
+                for exclude_query in exclude_lower:
+                    if exclude_query in tag_name_lower or any(exclude_query in alias for alias in aliases_lower):
+                        should_exclude = True
+                        break
+
+                if should_exclude:
+                    continue
+
             # タグ名で検索
-            if query_lower in tag["name"].lower():
+            if query_lower in tag_name_lower:
                 results.append(tag)
                 if len(results) >= limit:
                     break
@@ -179,6 +198,63 @@ class TagDictionary:
                     results.append(tag)
                     if len(results) >= limit:
                         break
+                    break
+
+        return results
+
+    def search_and(self, queries: list[str], limit: int = 50, exclude: list[str] | None = None) -> list[dict[str, Any]]:
+        """複数クエリのAND検索（除外条件対応）
+
+        Args:
+            queries: 検索クエリのリスト（スペースまたはカンマ区切りを想定）
+            limit: 最大返却数
+            exclude: 除外するキーワードのリスト
+
+        Returns:
+            全てのクエリにマッチし、除外条件に一致しないタグのリスト
+        """
+        if not queries:
+            return self._tags[:limit]
+
+        # クエリを小文字に変換
+        queries_lower = [q.lower().strip() for q in queries if q.strip()]
+        exclude_lower = [e.lower().strip() for e in (exclude or []) if e.strip()]
+
+        if not queries_lower:
+            return self._tags[:limit]
+
+        results: list[dict[str, Any]] = []
+
+        for tag in self._tags:
+            tag_name_lower = tag["name"].lower()
+            aliases_lower = [alias.lower() for alias in tag["aliases"]]
+
+            # 除外条件のチェック
+            if exclude_lower:
+                should_exclude = False
+                for exclude_query in exclude_lower:
+                    # 除外キーワードがタグ名またはエイリアスに含まれているか
+                    if exclude_query in tag_name_lower or any(exclude_query in alias for alias in aliases_lower):
+                        should_exclude = True
+                        break
+
+                if should_exclude:
+                    continue
+
+            # 全てのクエリが タグ名 または エイリアス のいずれかに含まれているかチェック
+            all_match = True
+            for query_lower in queries_lower:
+                # このクエリがタグ名かエイリアスのいずれかに含まれているか
+                tag_name_match = query_lower in tag_name_lower
+                alias_match = any(query_lower in alias for alias in aliases_lower)
+
+                if not (tag_name_match or alias_match):
+                    all_match = False
+                    break
+
+            if all_match:
+                results.append(tag)
+                if len(results) >= limit:
                     break
 
         return results

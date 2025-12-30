@@ -79,8 +79,8 @@ def render_prompt_input_with_tags(
         search_query = st.text_input(
             "🔍 タグを検索（英語・日本語対応）",
             key=search_key,
-            placeholder="例: smile, 笑顔, blue_eyes...",
-            help="タグ名または日本語でタグを検索できます",
+            placeholder="例: smile, 笑顔, blue_eyes... (スペース/カンマでAND, -XXXで除外)",
+            help="タグ名または日本語でタグを検索できます。複数キーワードをスペースまたはカンマで区切るとAND検索。-を付けると除外します。",
         )
     with cols[1]:
         st.write("")  # 高さ調整用
@@ -91,7 +91,42 @@ def render_prompt_input_with_tags(
 
     # 検索結果を表示
     if search_query:
-        results = tag_dict.search(search_query, limit=20)
+        # スペースまたはカンマで分割してAND検索を判定
+        import re
+        search_query = search_query.strip()  # 前後の空白を削除
+        queries = re.split(r'[,\s]+', search_query)
+        queries = [q for q in queries if q]  # 空文字を除去
+
+        # NOT条件（-で始まるもの）を分離
+        include_queries = [q for q in queries if not q.startswith('-')]
+        exclude_queries = [q[1:] for q in queries if q.startswith('-') and len(q) > 1]
+
+        # 検索モードの表示用文字列を作成
+        search_mode_parts = []
+        if len(include_queries) > 1:
+            search_mode_parts.append(f"AND検索: {' + '.join(include_queries)}")
+        elif len(include_queries) == 1:
+            search_mode_parts.append(f"検索: {include_queries[0]}")
+
+        if exclude_queries:
+            search_mode_parts.append(f"除外: {', '.join(exclude_queries)}")
+
+        if search_mode_parts:
+            st.caption(f"🔍 {' | '.join(search_mode_parts)}")
+
+        # 検索実行
+        if len(include_queries) > 1:
+            # AND検索
+            results = tag_dict.search_and(include_queries, limit=20, exclude=exclude_queries)
+        elif len(include_queries) == 1:
+            # 通常検索
+            results = tag_dict.search(include_queries[0], limit=20, exclude=exclude_queries)
+        elif exclude_queries:
+            # 除外のみ（人気タグから除外）
+            results = tag_dict.search("", limit=20, exclude=exclude_queries)
+        else:
+            # 条件なし
+            results = tag_dict.search("", limit=20)
 
         if results:
             st.markdown("**タグ候補（クリックでプロンプトに追加）**")
