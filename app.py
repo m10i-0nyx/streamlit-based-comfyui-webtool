@@ -3,25 +3,40 @@ from __future__ import annotations
 import asyncio
 import secrets
 import threading
-import time
-import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import streamlit as st
+from ulid import ULID
 
 from app.comfy_client import ComfyUIClient, GenerationResult
 from app.config import load_config
+from app.session import session_manager
+from app.storage import storage_manager
 from app.workflow import WorkflowTemplateError, load_workflow, render_workflow
 
-st.set_page_config(page_title="ComfyUI Web Tool", layout="wide")
+st.set_page_config(
+    page_title="ComfyUI Web Tool",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+CONFIGS = load_config()
+TZ = ZoneInfo(CONFIGS.time_zone)
 
 
-@st.cache_resource(show_spinner=False)
-def _history_store() -> tuple[dict[str, dict[str, Any]], threading.Lock]:
-    # Use cache_resource so data survives reruns and browser reloads until server restarts.
-    return {}, threading.Lock()
+def _sanitize_error_message(message: str) -> str:
+    """Redact sensitive endpoints from user-facing error messages."""
 
+    redacted = message or ""
+    secrets = {CONFIGS.api_base.rstrip("/"), CONFIGS.ws_url.rstrip("/")}
+    for secret in secrets:
+        if not secret:
+            continue
+        redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
 
 @st.cache_resource(show_spinner=False)
 def _user_counters() -> tuple[dict[str, int], threading.Lock]:
@@ -33,7 +48,6 @@ def _user_counters() -> tuple[dict[str, int], threading.Lock]:
 def _global_state() -> tuple[dict[str, int], threading.Lock]:
     return {"queued": 0, "running": 0}, threading.Lock()
 
-settings = load_config()
 
 
 @st.cache_data(show_spinner=False)
@@ -42,33 +56,24 @@ def _load_template(path: Path) -> dict[str, Any]:
 
 
 def _get_client_id() -> str:
-    if "client_id" in st.session_state:
-        return st.session_state["client_id"]
-
-    # Try to restore from query params so a browser reload keeps the same client_id.
-    try:
-        params = st.query_params
-        qp_id = params.get("client_id")
-    except Exception:
-        qp_id = None
-
-    client_id = qp_id or uuid.uuid4().hex
-    st.session_state["client_id"] = client_id
-    try:
-        st.query_params["client_id"] = client_id
-    except Exception:
-        pass
-    return client_id
+    """SessionManager経由でクライアントIDを取得"""
+    return session_manager.get_client_id()
 
 
 def _get_jobs() -> list[dict[str, Any]]:
+    """LocalStorageからジョブキューを取得"""
     if "jobs" not in st.session_state:
-        st.session_state["jobs"] = []
+        client_id = _get_client_id()
+        jobs = storage_manager.get(f"jobs_{client_id}", default=[])
+        st.session_state["jobs"] = jobs
     return st.session_state["jobs"]
 
 
 def _set_jobs(jobs: list[dict[str, Any]]) -> None:
+    """ジョブキューをLocalStorageに保存"""
     st.session_state["jobs"] = jobs
+    client_id = _get_client_id()
+    storage_manager.set(f"jobs_{client_id}", jobs)
 
 
 def _running_jobs_count() -> int:
@@ -137,49 +142,39 @@ def _release_running_slot() -> None:
 
 
 def _get_history() -> list[dict[str, Any]]:
+    """LocalStorageから履歴を取得"""
     if "history" not in st.session_state:
         client_id = _get_client_id()
-        persisted = _load_persisted_history(client_id)
-        st.session_state["history"] = persisted
+        history = storage_manager.get(f"history_{client_id}", default=[])
+        st.session_state["history"] = history
     return st.session_state["history"]
 
 
+def _save_history() -> None:
+    """履歴をLocalStorageに保存"""
+    client_id = _get_client_id()
+    history = st.session_state.get("history", [])
+    storage_manager.set(f"history_{client_id}", history)
+
+
 def _append_history(entry: dict[str, Any]) -> None:
+    """履歴に新しいエントリを追加"""
     history = _get_history()
     history.append(entry)
-    _save_persisted_history(_get_client_id(), history)
+    _save_history()
 
 
 def _upsert_history(job_id: str, data: dict[str, Any]) -> None:
-    """Insert or update a history entry by job_id, keeping TTL persistence."""
+    """履歴エントリを挿入または更新"""
     history = _get_history()
     for entry in history:
         if entry.get("job_id") == job_id:
             entry.update(data)
-            _save_persisted_history(_get_client_id(), history)
+            _save_history()
             return
     data_with_id = {**data, "job_id": job_id}
     history.append(data_with_id)
-    _save_persisted_history(_get_client_id(), history)
-
-
-def _load_persisted_history(client_id: str) -> list[dict[str, Any]]:
-    store, lock = _history_store()
-    now = time.time()
-    with lock:
-        entry = store.get(client_id)
-        if not entry:
-            return []
-        if now - entry.get("ts", 0) > settings.history_ttl:
-            store.pop(client_id, None)
-            return []
-        return list(entry.get("history", []))
-
-
-def _save_persisted_history(client_id: str, history: list[dict[str, Any]]) -> None:
-    store, lock = _history_store()
-    with lock:
-        store[client_id] = {"history": list(history), "ts": time.time()}
+    _save_history()
 
 
 def _apply_theme(mode: str) -> None:
@@ -224,19 +219,21 @@ def _random_seed() -> int:
     return secrets.randbelow(2**31)
 
 
+def _current_timestamp() -> str:
+    return datetime.now(tz=TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
 def _render_sidebar(theme_mode: str) -> None:
     st.sidebar.header("設定")
-    if settings.log_level in ["TRACE"]:
-        st.sidebar.write(f"API: {settings.api_base}")
-        st.sidebar.write(f"WebSocket: {settings.ws_url}")
-    st.sidebar.write(f"ワークフロー: {settings.workflow_path}")
-    st.sidebar.write(f"画像サイズ: {settings.width} x {settings.height}")
-    st.sidebar.write(
-        f"1ユーザあたりの同時リクエスト数: {settings.max_active_requests} 件"
-    )
-    if settings.global_max_active_requests > 0:
+    if CONFIGS.log_level in ["TRACE"]:
+        st.sidebar.write(f"API: {CONFIGS.api_base}")
+        st.sidebar.write(f"WebSocket: {CONFIGS.ws_url}")
+    st.sidebar.write(f"ワークフロー: {CONFIGS.workflow_path}")
+    st.sidebar.write(f"画像サイズ: {CONFIGS.width} x {CONFIGS.height}")
+    st.sidebar.write("1ユーザ・1セッション同時リクエスト数: 1 件")
+    if CONFIGS.global_max_active_requests > 0:
         st.sidebar.write(
-            f"システム全体同時上限: {settings.global_max_active_requests} 件"
+            f"システム全体同時上限: {CONFIGS.global_max_active_requests} 件"
         )
 
     counters, _ = _global_state()
@@ -254,7 +251,7 @@ def _render_sidebar(theme_mode: str) -> None:
     #)
     #st.sidebar.caption(f"テーマ: {theme_mode}")
 
-    st.sidebar.caption(f"ログレベル: {settings.log_level}")
+    st.sidebar.caption(f"ログレベル: {CONFIGS.log_level}")
 
 
 def _display_results(result: GenerationResult) -> None:
@@ -265,27 +262,29 @@ def _display_results(result: GenerationResult) -> None:
 
 def _display_history() -> None:
     history = list(reversed(_get_history()))
+    st.caption("過去の生成結果")
     if not history:
+        st.info("まだ履歴がありません。生成するとここに表示されます。")
         return
-    st.subheader("過去の生成結果")
     for idx, entry in enumerate(history, start=1):
-        status = entry.get("status", "success")
-        header = f"#{idx} [{status}] seed={entry.get('seed')}"
-        with st.expander(header):
+        status = entry.get("status", "running")
+        header = f"#{idx} [{status}]"
+        with st.expander(header, expanded=True if status == "success" else False):
             if entry.get("prompt_id"):
                 st.caption(f"prompt_id: {entry['prompt_id']}")
+            if entry.get("completed_at"):
+                st.caption(f"完了日時: {entry['completed_at']}")
 
             if status == "success":
-                for img_idx, img in enumerate(entry.get("images", []), start=1):
+                for img_idx, img_data in enumerate(entry.get("images", []), start=1):
                     col_img, col_meta = st.columns([3, 2])
-                    col_img.image(img, caption=f"出力 {img_idx}")
-                    col_meta.download_button(
-                        label="画像をダウンロード",
-                        data=img,
-                        file_name=f"result_{entry.get('prompt_id','unknown')}_{img_idx}.png",
-                        mime="image/png",
-                        key=f"download_{entry.get('prompt_id','unknown')}_{img_idx}",
-                    )
+                    # base64エンコードされた画像データをデコード
+                    if isinstance(img_data, str):
+                        img_bytes = storage_manager.decode_image(img_data)
+                    else:
+                        img_bytes = img_data
+                    col_img.image(img_bytes, caption=f"出力 {img_idx}")
+
                     if img_idx == 1:
                         col_meta.markdown("**Positive Prompt**")
                         col_meta.code(
@@ -297,30 +296,26 @@ def _display_history() -> None:
                         )
                         col_meta.markdown("**Seed**")
                         col_meta.code(str(entry.get("seed")), language="text")
+
+                    col_meta.download_button(
+                        label="画像をダウンロード",
+                        data=img_bytes,
+                        file_name=f"result_{entry.get('prompt_id','unknown')}_{img_idx}.png",
+                        mime="image/png",
+                        key=f"download_{entry.get('prompt_id','unknown')}_{img_idx}",
+                    )
+
             elif status == "running":
                 st.info("生成中... 履歴に画像が反映されるまでお待ちください")
                 st.text(f"Positive: {entry.get('positive_prompt','')}")
                 st.text(f"Negative: {entry.get('negative_prompt','')}")
                 st.text(f"Seed: {entry.get('seed')}")
+
             else:
                 st.error(entry.get("error", "不明なエラー"))
 
 
-def _render_job_progress() -> None:
-    jobs = _get_jobs()
-    if not jobs:
-        return
-    st.subheader("実行中のジョブ")
-    for job in jobs:
-        status = job.get("status")
-        label = f"PromptID: {job.get('prompt_id') or '取得中'} / seed={job['seed']}"
-        if status == "running":
-            st.info(f"生成中: {label}")
-        elif status == "queued":
-            st.warning(f"キュー待ち: {label}")
-
-
-def _recover_running_history() -> None:
+def _recover_running_job_history() -> None:
     """On reload, reconcile running entries by fetching results from ComfyUI."""
 
     if st.session_state.get("running_recovered"):
@@ -343,7 +338,7 @@ def _recover_running_history() -> None:
             stale_running += 1
     if cleaned:
         st.session_state["history"] = [h for h in history if not (h.get("status") == "running" and not h.get("prompt_id"))]
-        _save_persisted_history(_get_client_id(), st.session_state["history"])
+        _save_history()
         for _ in range(stale_running):
             _release_running_slot()
     if not running_entries:
@@ -362,9 +357,10 @@ def _recover_running_history() -> None:
                     "positive_prompt": entry.get("positive_prompt", ""),
                     "negative_prompt": entry.get("negative_prompt", ""),
                     "seed": entry.get("seed"),
-                    "images": [img.data for img in result.images],
+                    "images": [storage_manager.encode_image(img.data) for img in result.images],
                     "prompt_id": result.prompt_id,
                     "status": "success",
+                    "completed_at": _current_timestamp(),
                 },
             )
             _release_running_slot()
@@ -378,6 +374,7 @@ def _recover_running_history() -> None:
             if any(marker in message for marker in transient_markers):
                 # ComfyUI側でまだ履歴が固まっていない可能性が高いので、このラウンドでは待たずに継続
                 continue
+            sanitized_error = _sanitize_error_message(message)
             _upsert_history(
                 job_id,
                 {
@@ -386,11 +383,13 @@ def _recover_running_history() -> None:
                     "seed": entry.get("seed"),
                     "prompt_id": prompt_id,
                     "status": "failed",
-                    "error": f"結果取得に失敗しました: {exc}",
+                    "completed_at": _current_timestamp(),
+                    "error": f"結果取得に失敗しました: {sanitized_error}",
                 },
             )
             _release_running_slot()
         except Exception as exc:
+            sanitized_error = _sanitize_error_message(str(exc))
             _upsert_history(
                 job_id,
                 {
@@ -399,22 +398,23 @@ def _recover_running_history() -> None:
                     "seed": entry.get("seed"),
                     "prompt_id": prompt_id,
                     "status": "failed",
-                    "error": f"結果取得に失敗しました: {exc}",
+                    "completed_at": _current_timestamp(),
+                    "error": f"結果取得に失敗しました: {sanitized_error}",
                 },
             )
             _release_running_slot()
 
 
-def _maybe_process_jobs() -> None:
+def _process_job_queue() -> None:
     jobs = _get_jobs()
     running = _running_jobs_count()
-    per_user_available = max(0, settings.max_active_requests - running)
+    per_user_available = 0 if running >= 1 else 1
 
     global_available = None
-    if settings.global_max_active_requests > 0:
+    if CONFIGS.global_max_active_requests > 0:
         counters, lock = _global_state()
         with lock:
-            global_available = max(0, settings.global_max_active_requests - counters["running"])
+            global_available = max(0, CONFIGS.global_max_active_requests - counters["running"])
     if global_available is None:
         available = per_user_available
     else:
@@ -431,7 +431,7 @@ def _maybe_process_jobs() -> None:
         client_id = _get_client_id()
         counters, lock = _global_state()
         with lock:
-            if settings.global_max_active_requests > 0 and counters["running"] >= settings.global_max_active_requests:
+            if CONFIGS.global_max_active_requests > 0 and counters["running"] >= CONFIGS.global_max_active_requests:
                 continue
             _upsert_history(
                 job["id"],
@@ -452,14 +452,14 @@ def _maybe_process_jobs() -> None:
         available -= 1
 
         try:
-            template = _load_template(settings.workflow_path)
+            template = _load_template(CONFIGS.workflow_path)
             workflow = render_workflow(
                 template,
                 positive_prompt=job["positive_prompt"],
                 negative_prompt=job["negative_prompt"],
                 seed=job["seed"],
-                width=settings.width,
-                height=settings.height,
+                width=CONFIGS.width,
+                height=CONFIGS.height,
             )
             placeholder = st.empty()
             placeholder.info(
@@ -481,20 +481,25 @@ def _maybe_process_jobs() -> None:
                         on_prompt_id=_set_prompt_id,
                     )
                 )
+
             _display_results(result)
+
             _upsert_history(
                 job["id"],
                 {
                     "positive_prompt": job["positive_prompt"],
                     "negative_prompt": job["negative_prompt"],
                     "seed": job["seed"],
-                    "images": [img.data for img in result.images],
+                    "images": [storage_manager.encode_image(img.data) for img in result.images],
                     "prompt_id": result.prompt_id,
                     "status": "success",
+                    "completed_at": _current_timestamp(),
                 },
             )
+
         except WorkflowTemplateError as exc:
-            st.error(str(exc))
+            sanitized_error = _sanitize_error_message(str(exc))
+            st.error(sanitized_error)
             _upsert_history(
                 job["id"],
                 {
@@ -504,11 +509,12 @@ def _maybe_process_jobs() -> None:
                     "images": [],
                     "prompt_id": job.get("prompt_id"),
                     "status": "failed",
-                    "error": str(exc),
+                    "error": sanitized_error,
                 },
             )
         except Exception as exc:
-            st.error(f"生成に失敗しました: {exc}")
+            sanitized_error = _sanitize_error_message(str(exc))
+            st.error(f"生成に失敗しました: {sanitized_error}")
             st.caption(
                 "エラー詳細は上記メッセージを参照してください。/prompt 400 の場合は ComfyUI 側で"
                 "ワークフロー JSON が受理されていない可能性があります。"
@@ -521,7 +527,7 @@ def _maybe_process_jobs() -> None:
                     "images": [],
                     "prompt_id": job.get("prompt_id"),
                     "status": "failed",
-                    "error": str(exc),
+                    "error": sanitized_error,
                 }
             )
         finally:
@@ -533,86 +539,97 @@ async def _run_generation(
     workflow: dict[str, Any], client_id: str, on_prompt_id: Callable[[str], None] | None = None
 ) -> GenerationResult:
     client = ComfyUIClient(
-        api_base=settings.api_base,
-        ws_url=settings.ws_url,
-        timeout=settings.request_timeout,
-        log_level=settings.log_level,
+        api_base=CONFIGS.api_base,
+        ws_url=CONFIGS.ws_url,
+        timeout=CONFIGS.request_timeout,
+        log_level=CONFIGS.log_level,
     )
     return await client.generate(workflow, client_id, on_prompt_id=on_prompt_id)
 
 
 async def _fetch_existing_result(prompt_id: str, *, timeout: float | None = None, fast: bool = False) -> GenerationResult:
     client = ComfyUIClient(
-        api_base=settings.api_base,
-        ws_url=settings.ws_url,
-        timeout=timeout or settings.request_timeout,
-        log_level=settings.log_level,
+        api_base=CONFIGS.api_base,
+        ws_url=CONFIGS.ws_url,
+        timeout=timeout or CONFIGS.request_timeout,
+        log_level=CONFIGS.log_level,
     )
     return await client.fetch_existing(prompt_id, fast=fast)
 
 
 def main() -> None:
+    # セッション初期化
+    session_manager.initialize()
+    session_manager.sync_from_local_storage()
+
     theme_mode = "dark"
     _apply_theme(theme_mode)
 
     st.title("Streamlit Based ComfyUI Web Tool")
-    st.caption("プロンプト/ネガティブ/シードのみ編集可能なComfyUIクライアント")
 
     _render_sidebar(theme_mode)
 
-    _recover_running_history()
+    _recover_running_job_history()
 
-    # Auto-refresh every 60s while there are running entries with prompt_id to pick up completions.
+    # Auto-refresh every 10s while there are running entries with prompt_id to pick up completions.
     history_snapshot = _get_history()
     if any(h.get("status") == "running" and h.get("prompt_id") for h in history_snapshot):
         st.markdown(
-            "<meta http-equiv='refresh' content='60'>",
+            "<meta http-equiv='refresh' content='10'>",
             unsafe_allow_html=True,
         )
 
-    positive_prompt = st.text_area(
-        "プロンプト(描画したい内容を入力)", height=160, placeholder="描画したい内容を入力", value="Pikachu"
-    )
-    negative_prompt = st.text_area(
-        "ネガティブプロンプト(除外したい内容を入力)", height=120, placeholder="除外したい内容を入力", value="lowres, bad anatomy, error, missing fingers"
-    )
+    col_left, col_right = st.columns(2)
 
-    seed_value = st.number_input(
-        "シード値 (-1 の場合はランダム)", min_value=-1, step=1, value=-1, max_value=2**31 - 1
-    )
+    with col_left:
+        st.caption("プロンプト/ネガティブ/シードのみ編集可能なComfyUIクライアント")
 
-    if st.button("画像を生成する", type="primary"):
-        client_id = _get_client_id()
-        if _running_jobs_count() >= settings.max_active_requests:
-            st.error("1ユーザあたりの同時リクエスト上限に達しました。完了をお待ちください。")
-            st.stop()
-
-        if settings.global_max_active_requests > 0:
-            counters, lock = _global_state()
-            with lock:
-                if counters["running"] >= settings.global_max_active_requests:
-                    st.error("システム全体の同時実行上限に達しています。完了をお待ちください。")
-                    st.stop()
-
-        job_id = uuid.uuid4().hex
-        chosen_seed = _random_seed() if int(seed_value) < 0 else int(seed_value)
-        _add_job(
-            {
-                "id": job_id,
-                "status": "queued",
-                "positive_prompt": positive_prompt,
-                "negative_prompt": negative_prompt,
-                "seed": chosen_seed,
-                "prompt_id": None,
-            }
+        positive_prompt = st.text_area(
+            "プロンプト(描画したい内容を入力)",
+            height=160,
+            placeholder="描画したい内容を入力",
+            value="Pikachu",
         )
-        st.rerun()
+        negative_prompt = st.text_area(
+            "ネガティブプロンプト(除外したい内容を入力)",
+            height=120,
+            placeholder="除外したい内容を入力",
+            value="lowres, bad anatomy, error, missing fingers",
+        )
 
-    _maybe_process_jobs()
-    _render_job_progress()
+        seed_value = st.number_input(
+            "シード値 (-1 の場合はランダム)", min_value=-1, step=1, value=-1, max_value=2**31 - 1
+        )
 
-    _display_history()
+        if st.button("画像を生成する", type="primary"):
+            if _running_jobs_count() >= 1:
+                st.error("1ユーザあたりの同時リクエスト上限に達しました。完了をお待ちください。")
+            else:
+                if CONFIGS.global_max_active_requests > 0:
+                    counters, lock = _global_state()
+                    with lock:
+                        if counters["running"] >= CONFIGS.global_max_active_requests:
+                            st.error("システム全体の同時実行上限に達しています。完了をお待ちください。")
+                            st.stop()
 
+                job_id = str(ULID())
+                chosen_seed = _random_seed() if int(seed_value) < 0 else int(seed_value)
+                _add_job(
+                    {
+                        "id": job_id,
+                        "status": "queued",
+                        "positive_prompt": positive_prompt,
+                        "negative_prompt": negative_prompt,
+                        "seed": chosen_seed,
+                        "prompt_id": None,
+                    }
+                )
+                st.rerun()
+
+        _process_job_queue()
+
+    with col_right:
+        _display_history()
 
 if __name__ == "__main__":
     main()
