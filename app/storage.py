@@ -10,7 +10,6 @@ import json
 from typing import Any
 
 from streamlit_js_eval import streamlit_js_eval
-from ulid import ULID
 
 
 class LocalStorageManager:
@@ -51,7 +50,7 @@ class LocalStorageManager:
         (() => {{
             try {{
                 const value = window.localStorage.getItem('{key}');
-                return value ? JSON.parse(value) : null;
+                return value;
             }} catch (e) {{
                 console.error('LocalStorage get error:', e);
                 return null;
@@ -60,11 +59,19 @@ class LocalStorageManager:
         """
 
         # ユニークなキーを生成してキャッシュを回避
-        js_key = f"ls_get_{name}_{ULID()}"
-        result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
+        js_key = f"ls_get_{name}"
+        json_str = streamlit_js_eval(js_expressions=js_expr, key=js_key)
+
+        # JSONパースをPython側で実行
+        if json_str is None or json_str == "":
+            final_result = default
+        else:
+            try:
+                final_result = json.loads(json_str)
+            except (json.JSONDecodeError, TypeError):
+                final_result = default
 
         # 結果をキャッシュ
-        final_result = result if result is not None else default
         self._cache[cache_key] = final_result
 
         return final_result
@@ -95,7 +102,7 @@ class LocalStorageManager:
         }})()
         """
 
-        js_key = f"ls_set_{name}_{ULID()}"
+        js_key = f"ls_set_{name}"
         result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
         # JSが成功した場合のみキャッシュを更新
@@ -127,7 +134,7 @@ class LocalStorageManager:
         }})()
         """
 
-        js_key = f"ls_remove_{name}_{ULID()}"
+        js_key = f"ls_remove_{name}"
         result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
         # キャッシュから削除

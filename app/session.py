@@ -86,22 +86,29 @@ class SessionManager:
         ジョブキューと履歴をセッション状態に読み込みます。
         一度だけ実行されます。
         """
-        # 既に読み込み済みの場合はスキップ
+        # 既に読み込み成功している場合はスキップ
         if st.session_state.get("localstorage_loaded"):
             return
 
-        client_id = cls.get_client_id()
-
         # ジョブキューを読み込み（強制上書き、キャッシュバイパス）
-        jobs = STORAGE_MANAGER.get(f"jobs_{client_id}", default=[], use_cache=False)
-        st.session_state["jobs"] = jobs
+        jobs = STORAGE_MANAGER.get("jobs", default=None, use_cache=False)
 
         # 履歴を読み込み（強制上書き、キャッシュバイパス）
-        history = STORAGE_MANAGER.get(f"history_{client_id}", default=[], use_cache=False)
-        st.session_state["history"] = history
+        history = STORAGE_MANAGER.get("history", default=None, use_cache=False)
 
-        # 読み込み完了フラグ
-        st.session_state["localstorage_loaded"] = True
+        # streamlit_js_evalが初回レンダリング時にNoneを返すため、
+        # データが取得できるまで読み込み完了フラグを立てない
+        if jobs is not None and history is not None:
+            st.session_state["jobs"] = jobs if isinstance(jobs, list) else []
+            st.session_state["history"] = history if isinstance(history, list) else []
+            # 読み込み完了フラグ
+            st.session_state["localstorage_loaded"] = True
+        else:
+            # データ取得失敗時は初期値を設定し、次回リトライ
+            if "jobs" not in st.session_state:
+                st.session_state["jobs"] = []
+            if "history" not in st.session_state:
+                st.session_state["history"] = []
 
     @classmethod
     def sync_to_local_storage(cls) -> None:
@@ -113,11 +120,11 @@ class SessionManager:
 
         # ジョブキューを保存
         jobs = st.session_state.get("jobs", [])
-        STORAGE_MANAGER.set(f"jobs_{client_id}", jobs)
+        STORAGE_MANAGER.set(f"jobs", jobs)
 
         # 履歴を保存
         history = st.session_state.get("history", [])
-        STORAGE_MANAGER.set(f"history_{client_id}", history)
+        STORAGE_MANAGER.set(f"history", history)
 
     @classmethod
     def clear_local_storage(cls) -> None:
@@ -127,8 +134,8 @@ class SessionManager:
         クリアします。
         """
         client_id = cls.get_client_id()
-        STORAGE_MANAGER.remove(f"jobs_{client_id}")
-        STORAGE_MANAGER.remove(f"history_{client_id}")
+        STORAGE_MANAGER.remove(f"jobs")
+        STORAGE_MANAGER.remove(f"history")
 
         # セッション状態もクリア
         st.session_state["jobs"] = []
@@ -136,4 +143,4 @@ class SessionManager:
 
 
 # グローバルインスタンス
-session_manager = SessionManager()
+SESSION_MANAGER = SessionManager()

@@ -13,7 +13,7 @@ from ulid import ULID
 
 from app.comfy_client import ComfyUIClient, GenerationResult
 from app.config import load_config
-from app.session import session_manager
+from app.session import SESSION_MANAGER
 from app.storage import STORAGE_MANAGER
 from app.workflow import WorkflowTemplateError, load_workflow, render_workflow
 
@@ -57,7 +57,7 @@ def _load_template(path: Path) -> dict[str, Any]:
 
 def _get_client_id() -> str:
     """SessionManager経由でクライアントIDを取得"""
-    return session_manager.get_client_id()
+    return SESSION_MANAGER.get_client_id()
 
 
 def _get_images_store() -> dict[str, bytes]:
@@ -289,6 +289,41 @@ def _display_results(result: GenerationResult) -> None:
         st.image(image.data, caption=f"出力 {idx}: {image.file_name}")
 
 
+def _try_restore_images_from_prompt_id(entry: dict[str, Any]) -> bool:
+    """prompt_idから画像を復元し、履歴を更新する
+
+    Args:
+        entry: 履歴エントリ
+
+    Returns:
+        復元に成功した場合True、失敗した場合False
+    """
+    prompt_id = entry.get("prompt_id")
+    if not prompt_id:
+        return False
+
+    try:
+        # ComfyUI APIから画像を再取得
+        result = asyncio.run(_fetch_existing_result(prompt_id, timeout=5.0, fast=False))
+
+        # 画像をsession_stateに保存し、IDを取得
+        image_ids = [_store_image(img.data) for img in result.images]
+
+        # 履歴を更新
+        job_id = entry.get("job_id", prompt_id)
+        _upsert_history(
+            job_id,
+            {
+                "images": image_ids,
+            },
+        )
+        return True
+    except Exception as exc:
+        if CONFIGS.log_level in ["TRACE", "DEBUG"]:
+            st.warning(f"画像の復元に失敗: {_sanitize_error_message(str(exc))}")
+        return False
+
+
 def _display_history() -> None:
     history = list(reversed(_get_history()))
     st.caption("過去の生成結果")
@@ -305,6 +340,13 @@ def _display_history() -> None:
                 st.caption(f"完了日時: {entry['completed_at']}")
 
             if status == "success":
+                # 画像が存在しない場合、prompt_idから復元を試みる
+                image_ids = entry.get("images", [])
+                if not image_ids and entry.get("prompt_id"):
+                    with st.spinner("画像を復元中..."):
+                        if _try_restore_images_from_prompt_id(entry):
+                            st.rerun()
+
                 for img_idx, image_id in enumerate(entry.get("images", []), start=1):
                     col_img, col_meta = st.columns([3, 2])
                     # 画像IDから画像データを取得
@@ -312,7 +354,17 @@ def _display_history() -> None:
                     if img_bytes:
                         col_img.image(img_bytes, caption=f"出力 {img_idx}")
                     else:
-                        col_img.warning("画像が見つかりません（セッションが期限切れの可能性）")
+                        # 画像が見つからない場合、prompt_idから復元を試みる
+                        if entry.get("prompt_id"):
+                            col_img.warning("画像が見つかりません")
+                            if col_img.button("ComfyUIから復元", key=f"restore_{entry.get('prompt_id')}_{img_idx}"):
+                                with st.spinner("画像を復元中..."):
+                                    if _try_restore_images_from_prompt_id(entry):
+                                        st.rerun()
+                                    else:
+                                        st.error("画像の復元に失敗しました")
+                        else:
+                            col_img.warning("画像が見つかりません（prompt_idなし）")
 
                     if img_idx == 1:
                         col_meta.markdown("**Positive Prompt**")
@@ -593,10 +645,10 @@ async def _fetch_existing_result(prompt_id: str, *, timeout: float | None = None
 
 def main() -> None:
     # セッション初期化
-    session_manager.initialize()
-    session_manager.sync_from_local_storage()
+    SESSION_MANAGER.initialize()
+    SESSION_MANAGER.sync_from_local_storage()
 
-    if CONFIGS.log_level in ["DEBUG", "TRACE"]:
+    if CONFIGS.log_level in ["TRACE"]:
         st.write("Debug - jobs:", st.session_state.get("jobs", []))
         st.write("Debug - history:", st.session_state.get("history", []))
 
@@ -670,15 +722,14 @@ def main() -> None:
         _display_history()
 
     # LocalStorageへの同期（rerun前に確実に実行）
-    client_id = _get_client_id()
     if st.session_state.get("history_needs_sync"):
         history = st.session_state.get("history", [])
-        STORAGE_MANAGER.set(f"history_{client_id}", history)
+        STORAGE_MANAGER.set(f"history", history)
         st.session_state["history_needs_sync"] = False
 
     if st.session_state.get("jobs_needs_sync"):
         jobs = st.session_state.get("jobs", [])
-        STORAGE_MANAGER.set(f"jobs_{client_id}", jobs)
+        STORAGE_MANAGER.set(f"jobs", jobs)
         st.session_state["jobs_needs_sync"] = False
 
 if __name__ == "__main__":
