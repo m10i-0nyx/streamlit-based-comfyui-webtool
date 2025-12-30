@@ -334,6 +334,7 @@ def _try_restore_images_from_prompt_id(entry: dict[str, Any]) -> bool:
             },
         )
         return True
+
     except Exception as exc:
         if CONFIGS.log_level in ["TRACE", "DEBUG"]:
             st.warning(f"画像の復元に失敗: {_sanitize_error_message(str(exc))}")
@@ -377,12 +378,6 @@ def _display_history() -> None:
 
             if status == "success":
                 # 画像が存在しない場合、prompt_idから復元を試みる
-                image_ids = entry.get("images", [])
-                if not image_ids and entry.get("prompt_id"):
-                    with st.spinner("画像を復元中..."):
-                        if _try_restore_images_from_prompt_id(entry):
-                            st.rerun()
-
                 for img_idx, image_id in enumerate(entry.get("images", []), start=1):
                     col_img, col_meta = st.columns([3, 2])
                     # 画像IDから画像データを取得
@@ -392,13 +387,20 @@ def _display_history() -> None:
                     else:
                         # 画像が見つからない場合、prompt_idから復元を試みる
                         if entry.get("prompt_id"):
-                            col_img.warning("画像が見つかりません")
-                            if col_img.button("ComfyUIから復元", key=f"restore_{entry.get('prompt_id')}_{img_idx}"):
-                                with st.spinner("画像を復元中..."):
-                                    if _try_restore_images_from_prompt_id(entry):
-                                        st.rerun()
-                                    else:
-                                        st.error("画像の復元に失敗しました")
+                            # 再取得中フラグをチェック
+                            restore_key = f"restoring_{entry.get('prompt_id')}_{img_idx}"
+
+                            if col_img.button(
+                                "ComfyUIから再取得",
+                                key=f"restore_{entry.get('prompt_id')}_{img_idx}"
+                            ):
+                                col_img.info("画像を再取得中...")
+                                # 処理を実行
+                                if _try_restore_images_from_prompt_id(entry):
+                                    st.session_state[restore_key] = False
+                                else:
+                                    st.session_state[restore_key] = False
+                                    col_img.error("画像の再取得に失敗しました(ComfyUI側で結果が見つかりませんでした)")
                         else:
                             col_img.warning("画像が見つかりません（prompt_idなし）")
 
@@ -470,14 +472,12 @@ def _recover_running_job_history() -> None:
         try:
             result = asyncio.run(_fetch_existing_result(prompt_id, timeout=1.5, fast=True))
             # 画像をsession_stateに保存し、IDを取得
-            image_ids = [_store_image(img.data) for img in result.images]
             _upsert_history(
                 job_id,
                 {
                     "positive_prompt": entry.get("positive_prompt", ""),
                     "negative_prompt": entry.get("negative_prompt", ""),
                     "seed": entry.get("seed"),
-                    "images": image_ids,
                     "prompt_id": result.prompt_id,
                     "status": "success",
                     "completed_at": _current_timestamp(),
@@ -680,10 +680,6 @@ async def _fetch_existing_result(prompt_id: str, *, timeout: float | None = None
 
 
 def main() -> None:
-    # セッション初期化
-    SESSION_MANAGER.initialize()
-    SESSION_MANAGER.sync_from_local_storage()
-
     theme_mode = "dark"
     _apply_theme(theme_mode)
 
@@ -691,6 +687,11 @@ def main() -> None:
 
     _render_sidebar(theme_mode)
 
+    # セッション初期化
+    SESSION_MANAGER.initialize()
+    SESSION_MANAGER.sync_from_local_storage()
+
+    # 実行中ジョブの履歴復元
     _recover_running_job_history()
 
     # Auto-refresh every 10s while there are running entries with prompt_id to pick up completions.
@@ -723,7 +724,10 @@ def main() -> None:
             "シード値 (-1 の場合はランダム)", min_value=-1, step=1, value=-1, max_value=2**31 - 1
         )
 
-        if st.button("画像を生成する", type="primary"):
+        # ジョブ実行中はボタンを無効化して連打を防止
+        is_generating = _running_jobs_count() >= 1
+
+        if st.button("画像を生成する", type="primary", disabled=is_generating):
             if _running_jobs_count() >= 1:
                 st.error("1ユーザあたりの同時リクエスト上限に達しました。完了をお待ちください。")
             else:
