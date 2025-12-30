@@ -372,16 +372,15 @@ def _display_history() -> None:
     for idx, entry in enumerate(history, start=1):
         status = entry.get("status", "running")
         job_id = entry.get("job_id", entry.get("prompt_id", f"unknown_{idx}"))
-        header = f"#{idx} [{status}]"
+        completed_at = entry.get('completed_at')
+        header = f"#{idx}, completed at: {completed_at if completed_at else 'N/A'}, [{status}]"
 
-        with st.expander(header, expanded=True if status == "success" else False):
+        with st.expander(header, expanded=(idx == 1)):
             # 削除ボタンをexpanderの中に配置
             col_info, col_delete = st.columns([10, 1])
             with col_info:
                 if entry.get("prompt_id"):
                     st.caption(f"prompt_id: {entry['prompt_id']}")
-                if entry.get("completed_at"):
-                    st.caption(f"完了日時: {entry['completed_at']}")
             with col_delete:
                 if st.button("🗑️", key=f"delete_{job_id}_{idx}", help="この履歴を削除"):
                     _delete_history_entry(job_id)
