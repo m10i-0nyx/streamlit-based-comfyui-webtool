@@ -287,28 +287,21 @@ def _display_history() -> None:
                         key=f"download_{entry.get('prompt_id','unknown')}_{img_idx}",
                     )
                     if img_idx == 1:
-                        col_meta.markdown(
-                            """
-                            **Positive Prompt**
-
-                            {positive}
-
-                            **Negative Prompt**
-
-                            {negative}
-
-                            **Seed**: {seed}
-                            """.format(
-                                positive=entry.get("positive_prompt", ""),
-                                negative=entry.get("negative_prompt", ""),
-                                seed=entry.get("seed"),
-                            )
+                        col_meta.markdown("**Positive Prompt**")
+                        col_meta.code(
+                            entry.get("positive_prompt", ""), language="text"
                         )
+                        col_meta.markdown("**Negative Prompt**")
+                        col_meta.code(
+                            entry.get("negative_prompt", ""), language="text"
+                        )
+                        col_meta.markdown("**Seed**")
+                        col_meta.code(str(entry.get("seed")), language="text")
             elif status == "running":
                 st.info("生成中... 履歴に画像が反映されるまでお待ちください")
-                st.caption(f"Positive: {entry.get('positive_prompt','')}")
-                st.caption(f"Negative: {entry.get('negative_prompt','')}")
-                st.caption(f"Seed: {entry.get('seed')}")
+                st.text(f"Positive: {entry.get('positive_prompt','')}")
+                st.text(f"Negative: {entry.get('negative_prompt','')}")
+                st.text(f"Seed: {entry.get('seed')}")
             else:
                 st.error(entry.get("error", "不明なエラー"))
 
