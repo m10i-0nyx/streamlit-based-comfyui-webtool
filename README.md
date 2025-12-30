@@ -3,11 +3,15 @@
 Streamlit で ComfyUI API + WebSocket サーバーを操作する簡易フロントエンドです。プロンプト・ネガティブプロンプト・シードのみユーザーが変更でき、その他のノード設計はワークフローテンプレート JSON で固定します。履歴はセッション間で保持され、リロード後も prompt_id を用いて結果を再取得します。
 
 ## セットアップ
-1. Python 3.13 で仮想環境を作成し、有効化します。
+1. UVで Python 3.13 仮想環境を作成し、有効化します。
 2. 依存関係をインストールします。
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv -p 3.13 .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+```
+
 3. `.env.example` を `.env` にコピーし、環境変数を設定します。
   - `COMFYUI_BASE_URL` (例: http://localhost:8188)
   - `COMFYUI_WS_URL` (例: ws://localhost:8188/ws)
