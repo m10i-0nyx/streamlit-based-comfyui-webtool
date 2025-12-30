@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from streamlit_js_eval import streamlit_js_eval
@@ -23,6 +24,7 @@ class LocalStorageManager:
         """
         self.key_prefix = key_prefix
         self._cache: dict[str, Any] = {}  # 読み込みキャッシュ
+        self._log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
     def _make_key(self, name: str) -> str:
         """LocalStorageのキー名を生成"""
@@ -60,7 +62,9 @@ class LocalStorageManager:
 
         # ユニークなキーを生成してキャッシュを回避
         js_key = f"ls_get_{name}"
-        json_str = streamlit_js_eval(js_expressions=js_expr, key=js_key)
+        # TRACEレベルの時のみログを表示
+        want_output = self._log_level == "TRACE"
+        json_str = streamlit_js_eval(js_expressions=js_expr, key=js_key, want_output=want_output)
 
         # JSONパースをPython側で実行
         if json_str is None or json_str == "":
@@ -103,7 +107,9 @@ class LocalStorageManager:
         """
 
         js_key = f"ls_set_{name}"
-        result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
+        # TRACEレベルの時のみログを表示
+        want_output = self._log_level == "TRACE"
+        result = streamlit_js_eval(js_expressions=js_expr, key=js_key, want_output=want_output)
 
         # JSが成功した場合のみキャッシュを更新
         if result is True:
@@ -135,7 +141,9 @@ class LocalStorageManager:
         """
 
         js_key = f"ls_remove_{name}"
-        result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
+        # TRACEレベルの時のみログを表示
+        want_output = self._log_level == "TRACE"
+        result = streamlit_js_eval(js_expressions=js_expr, key=js_key, want_output=want_output)
 
         # キャッシュから削除
         if result is True and key in self._cache:
