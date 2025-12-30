@@ -27,8 +27,8 @@ class Configs():
     api_base: str
     ws_url: str
     workflow_path: Path
-    width: int
-    height: int
+    width_list: list[int]
+    height_list: list[int]
     request_timeout: float
     debug: bool
     history_ttl: int
@@ -43,8 +43,18 @@ def load_config() -> Configs:
     api_base = os.getenv("COMFYUI_BASE_URL", DEFAULT_API_BASE).rstrip("/")
     ws_url = os.getenv("COMFYUI_WS_URL", DEFAULT_WS_URL).rstrip("/")
     workflow_path = Path(os.getenv("WORKFLOW_JSON_PATH", DEFAULT_WORKFLOW_PATH))
-    width = int(os.getenv("IMAGE_WIDTH", str(DEFAULT_WIDTH)))
-    height = int(os.getenv("IMAGE_HEIGHT", str(DEFAULT_HEIGHT)))
+
+    # Parse width and height as comma-separated lists
+    width_str = os.getenv("IMAGE_WIDTH", str(DEFAULT_WIDTH))
+    width_list = [int(w.strip()) for w in width_str.split(",") if w.strip()]
+    if not width_list:
+        width_list = [DEFAULT_WIDTH]
+
+    height_str = os.getenv("IMAGE_HEIGHT", str(DEFAULT_HEIGHT))
+    height_list = [int(h.strip()) for h in height_str.split(",") if h.strip()]
+    if not height_list:
+        height_list = [DEFAULT_HEIGHT]
+
     request_timeout = float(
         os.getenv("REQUEST_TIMEOUT_SECONDS", str(DEFAULT_REQUEST_TIMEOUT))
     )
@@ -74,8 +84,8 @@ def load_config() -> Configs:
         api_base=api_base,
         ws_url=ws_url,
         workflow_path=workflow_path,
-        width=width,
-        height=height,
+        width_list=width_list,
+        height_list=height_list,
         request_timeout=request_timeout,
         debug=debug,
         history_ttl=history_ttl,

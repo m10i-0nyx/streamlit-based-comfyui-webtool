@@ -274,7 +274,7 @@ def _render_sidebar(theme_mode: str) -> None:
         st.sidebar.write(f"API: {CONFIGS.api_base}")
         st.sidebar.write(f"WebSocket: {CONFIGS.ws_url}")
     st.sidebar.write(f"ワークフロー: {CONFIGS.workflow_path}")
-    st.sidebar.write(f"画像サイズ: {CONFIGS.width} x {CONFIGS.height}")
+    st.sidebar.write(f"画像サイズ選択肢: {len(CONFIGS.width_list)} × {len(CONFIGS.height_list)} 種類")
     st.sidebar.write("1ユーザ・1セッション同時リクエスト数: 1 件")
     if CONFIGS.global_max_active_requests > 0:
         st.sidebar.write(
@@ -415,6 +415,10 @@ def _display_history() -> None:
                         )
                         col_meta.markdown("**Seed**")
                         col_meta.code(str(entry.get("seed")), language="text")
+                        col_meta.markdown("**Image Size**")
+                        width = entry.get("width", CONFIGS.width_list[0])
+                        height = entry.get("height", CONFIGS.height_list[0])
+                        col_meta.code(f"{width}x{height}", language="text")
 
                     if img_bytes:
                         col_meta.download_button(
@@ -478,6 +482,8 @@ def _recover_running_job_history() -> None:
                     "positive_prompt": entry.get("positive_prompt", ""),
                     "negative_prompt": entry.get("negative_prompt", ""),
                     "seed": entry.get("seed"),
+                    "width": entry.get("width", CONFIGS.width_list[0]),
+                    "height": entry.get("height", CONFIGS.height_list[0]),
                     "prompt_id": result.prompt_id,
                     "status": "success",
                     "completed_at": _current_timestamp(),
@@ -501,6 +507,8 @@ def _recover_running_job_history() -> None:
                     "positive_prompt": entry.get("positive_prompt", ""),
                     "negative_prompt": entry.get("negative_prompt", ""),
                     "seed": entry.get("seed"),
+                    "width": entry.get("width", CONFIGS.width_list[0]),
+                    "height": entry.get("height", CONFIGS.height_list[0]),
                     "prompt_id": prompt_id,
                     "status": "failed",
                     "completed_at": _current_timestamp(),
@@ -516,6 +524,8 @@ def _recover_running_job_history() -> None:
                     "positive_prompt": entry.get("positive_prompt", ""),
                     "negative_prompt": entry.get("negative_prompt", ""),
                     "seed": entry.get("seed"),
+                    "width": entry.get("width", CONFIGS.width_list[0]),
+                    "height": entry.get("height", CONFIGS.height_list[0]),
                     "prompt_id": prompt_id,
                     "status": "failed",
                     "completed_at": _current_timestamp(),
@@ -560,6 +570,8 @@ def _process_job_queue() -> None:
                     "positive_prompt": job["positive_prompt"],
                     "negative_prompt": job["negative_prompt"],
                     "seed": job["seed"],
+                    "width": job.get("width", CONFIGS.width_list[0]),
+                    "height": job.get("height", CONFIGS.height_list[0]),
                     "prompt_id": job.get("prompt_id"),
                 },
             )
@@ -578,8 +590,8 @@ def _process_job_queue() -> None:
                 positive_prompt=job["positive_prompt"],
                 negative_prompt=job["negative_prompt"],
                 seed=job["seed"],
-                width=CONFIGS.width,
-                height=CONFIGS.height,
+                width=job.get("width", CONFIGS.width_list[0]),
+                height=job.get("height", CONFIGS.height_list[0]),
             )
             placeholder = st.empty()
             placeholder.info(
@@ -612,6 +624,8 @@ def _process_job_queue() -> None:
                     "positive_prompt": job["positive_prompt"],
                     "negative_prompt": job["negative_prompt"],
                     "seed": job["seed"],
+                    "width": job.get("width", CONFIGS.width_list[0]),
+                    "height": job.get("height", CONFIGS.height_list[0]),
                     "images": image_ids,
                     "prompt_id": result.prompt_id,
                     "status": "success",
@@ -628,6 +642,8 @@ def _process_job_queue() -> None:
                     "positive_prompt": job["positive_prompt"],
                     "negative_prompt": job["negative_prompt"],
                     "seed": job["seed"],
+                    "width": job.get("width", CONFIGS.width_list[0]),
+                    "height": job.get("height", CONFIGS.height_list[0]),
                     "images": [],
                     "prompt_id": job.get("prompt_id"),
                     "status": "failed",
@@ -646,6 +662,8 @@ def _process_job_queue() -> None:
                     "positive_prompt": job["positive_prompt"],
                     "negative_prompt": job["negative_prompt"],
                     "seed": job["seed"],
+                    "width": job.get("width", CONFIGS.width_list[0]),
+                    "height": job.get("height", CONFIGS.height_list[0]),
                     "images": [],
                     "prompt_id": job.get("prompt_id"),
                     "status": "failed",
@@ -720,6 +738,22 @@ def main() -> None:
             value="lowres, bad anatomy, error, missing fingers",
         )
 
+        # 画像サイズの選択
+        size_options = []
+        for w in CONFIGS.width_list:
+            for h in CONFIGS.height_list:
+                size_options.append(f"{w} x {h}")
+
+        selected_size = st.selectbox(
+            "画像サイズ(幅x高さ)",
+            options=size_options,
+            index=0,
+        )
+        # Type narrowing for selectbox return value
+        if selected_size is None:
+            selected_size = size_options[0]
+        selected_width, selected_height = map(int, selected_size.split("x"))
+
         seed_value = st.number_input(
             "シード値 (-1 の場合はランダム)", min_value=-1, step=1, value=-1, max_value=2**31 - 1
         )
@@ -747,6 +781,8 @@ def main() -> None:
                         "positive_prompt": positive_prompt,
                         "negative_prompt": negative_prompt,
                         "seed": chosen_seed,
+                        "width": selected_width,
+                        "height": selected_height,
                         "prompt_id": None,
                     }
                 )
@@ -770,7 +806,7 @@ def main() -> None:
 
     if CONFIGS.log_level in ["TRACE", "DEBUG"]:
         st.write("Debug - localstorage_loaded:", st.session_state.get("localstorage_loaded"))
-        #st.write("Debug - jobs:", st.session_state.get("jobs", []))
+        st.write("Debug - jobs:", st.session_state.get("jobs", []))
         st.write("Debug - history:", st.session_state.get("history", []))
 
 if __name__ == "__main__":
