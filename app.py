@@ -49,7 +49,7 @@ def _get_client_id() -> str:
     try:
         params = st.query_params
         qp_id = params.get("client_id")
-    except Exception:  # noqa: BLE001
+    except Exception:
         qp_id = None
 
     client_id = qp_id or uuid.uuid4().hex
@@ -390,7 +390,7 @@ def _recover_running_history() -> None:
                 },
             )
             _release_running_slot()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _upsert_history(
                 job_id,
                 {
@@ -507,7 +507,7 @@ def _maybe_process_jobs() -> None:
                     "error": str(exc),
                 },
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             st.error(f"生成に失敗しました: {exc}")
             st.caption(
                 "エラー詳細は上記メッセージを参照してください。/prompt 400 の場合は ComfyUI 側で"
