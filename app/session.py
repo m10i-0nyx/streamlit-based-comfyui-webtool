@@ -10,7 +10,7 @@ import streamlit as st
 from ulid import ULID
 from streamlit_js_eval import streamlit_js_eval
 
-from app.storage import storage_manager
+from app.storage import STORAGE_MANAGER
 
 
 class SessionManager:
@@ -71,16 +71,7 @@ class SessionManager:
         if st.session_state.get("session_initialized"):
             return
 
-        # クライアントIDを確保
-        client_id = cls.get_client_id()
-
-        # セッション変数の初期化
-        if "jobs" not in st.session_state:
-            st.session_state["jobs"] = []
-
-        if "history" not in st.session_state:
-            st.session_state["history"] = []
-
+        # running_recoveredフラグのみここで初期化
         if "running_recovered" not in st.session_state:
             st.session_state["running_recovered"] = False
 
@@ -101,15 +92,13 @@ class SessionManager:
 
         client_id = cls.get_client_id()
 
-        # ジョブキューを読み込み
-        if "jobs" not in st.session_state:
-            jobs = storage_manager.get(f"jobs_{client_id}", default=[])
-            st.session_state["jobs"] = jobs
+        # ジョブキューを読み込み（強制上書き、キャッシュバイパス）
+        jobs = STORAGE_MANAGER.get(f"jobs_{client_id}", default=[], use_cache=False)
+        st.session_state["jobs"] = jobs
 
-        # 履歴を読み込み
-        if "history" not in st.session_state:
-            history = storage_manager.get(f"history_{client_id}", default=[])
-            st.session_state["history"] = history
+        # 履歴を読み込み（強制上書き、キャッシュバイパス）
+        history = STORAGE_MANAGER.get(f"history_{client_id}", default=[], use_cache=False)
+        st.session_state["history"] = history
 
         # 読み込み完了フラグ
         st.session_state["localstorage_loaded"] = True
@@ -119,21 +108,16 @@ class SessionManager:
         """セッション状態からLocalStorageに同期
 
         現在のジョブキューと履歴をLocalStorageに保存します。
-        dirtyフラグが立っている場合のみ保存を実行します。
         """
         client_id = cls.get_client_id()
 
-        # ジョブキューを保存（dirtyフラグがある場合のみ）
-        if st.session_state.get("jobs_dirty"):
-            jobs = st.session_state.get("jobs", [])
-            storage_manager.set(f"jobs_{client_id}", jobs)
-            st.session_state["jobs_dirty"] = False
+        # ジョブキューを保存
+        jobs = st.session_state.get("jobs", [])
+        STORAGE_MANAGER.set(f"jobs_{client_id}", jobs)
 
-        # 履歴を保存（dirtyフラグがある場合のみ）
-        if st.session_state.get("history_dirty"):
-            history = st.session_state.get("history", [])
-            storage_manager.set(f"history_{client_id}", history)
-            st.session_state["history_dirty"] = False
+        # 履歴を保存
+        history = st.session_state.get("history", [])
+        STORAGE_MANAGER.set(f"history_{client_id}", history)
 
     @classmethod
     def clear_local_storage(cls) -> None:
@@ -143,8 +127,8 @@ class SessionManager:
         クリアします。
         """
         client_id = cls.get_client_id()
-        storage_manager.remove(f"jobs_{client_id}")
-        storage_manager.remove(f"history_{client_id}")
+        STORAGE_MANAGER.remove(f"jobs_{client_id}")
+        STORAGE_MANAGER.remove(f"history_{client_id}")
 
         # セッション状態もクリア
         st.session_state["jobs"] = []

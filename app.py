@@ -14,7 +14,7 @@ from ulid import ULID
 from app.comfy_client import ComfyUIClient, GenerationResult
 from app.config import load_config
 from app.session import session_manager
-from app.storage import storage_manager
+from app.storage import STORAGE_MANAGER
 from app.workflow import WorkflowTemplateError, load_workflow, render_workflow
 
 st.set_page_config(
@@ -60,6 +60,41 @@ def _get_client_id() -> str:
     return session_manager.get_client_id()
 
 
+def _get_images_store() -> dict[str, bytes]:
+    """画像データを保管するsession_stateのストアを取得"""
+    if "images_store" not in st.session_state:
+        st.session_state["images_store"] = {}
+    return st.session_state["images_store"]
+
+
+def _store_image(image_data: bytes) -> str:
+    """画像データを保存し、ユニークなIDを返す
+
+    Args:
+        image_data: 画像のバイトデータ
+
+    Returns:
+        画像のID
+    """
+    image_id = str(ULID())
+    images_store = _get_images_store()
+    images_store[image_id] = image_data
+    return image_id
+
+
+def _get_image(image_id: str) -> bytes | None:
+    """画像IDから画像データを取得
+
+    Args:
+        image_id: 画像のID
+
+    Returns:
+        画像のバイトデータ、またはNone
+    """
+    images_store = _get_images_store()
+    return images_store.get(image_id)
+
+
 def _get_jobs() -> list[dict[str, Any]]:
     """ジョブキューを取得（session_stateから）"""
     if "jobs" not in st.session_state:
@@ -68,10 +103,9 @@ def _get_jobs() -> list[dict[str, Any]]:
 
 
 def _set_jobs(jobs: list[dict[str, Any]]) -> None:
-    """ジョブキューを保存（バッチ処理用フラグで制御）"""
+    """ジョブキューの変更をマーク（実際の保存はmain()の最後で行う）"""
     st.session_state["jobs"] = jobs
-    # 保存フラグを立てる（実際の保存はsync_to_local_storage()で行う）
-    st.session_state["jobs_dirty"] = True
+    st.session_state["jobs_needs_sync"] = True
 
 
 def _running_jobs_count() -> int:
@@ -147,9 +181,9 @@ def _get_history() -> list[dict[str, Any]]:
 
 
 def _save_history() -> None:
-    """履歴をLocalStorageに保存（バッチ処理用フラグで制御）"""
-    # 保存フラグを立てる（実際の保存はsync_to_local_storage()で行う）
-    st.session_state["history_dirty"] = True
+    """履歴の変更をマーク（実際の保存はmain()の最後で行う）"""
+    # dirtyフラグを立てて、main()の最後で保存するようにする
+    st.session_state["history_needs_sync"] = True
 
 
 def _append_history(entry: dict[str, Any]) -> None:
@@ -271,14 +305,14 @@ def _display_history() -> None:
                 st.caption(f"完了日時: {entry['completed_at']}")
 
             if status == "success":
-                for img_idx, img_data in enumerate(entry.get("images", []), start=1):
+                for img_idx, image_id in enumerate(entry.get("images", []), start=1):
                     col_img, col_meta = st.columns([3, 2])
-                    # base64エンコードされた画像データをデコード
-                    if isinstance(img_data, str):
-                        img_bytes = storage_manager.decode_image(img_data)
+                    # 画像IDから画像データを取得
+                    img_bytes = _get_image(image_id)
+                    if img_bytes:
+                        col_img.image(img_bytes, caption=f"出力 {img_idx}")
                     else:
-                        img_bytes = img_data
-                    col_img.image(img_bytes, caption=f"出力 {img_idx}")
+                        col_img.warning("画像が見つかりません（セッションが期限切れの可能性）")
 
                     if img_idx == 1:
                         col_meta.markdown("**Positive Prompt**")
@@ -292,13 +326,14 @@ def _display_history() -> None:
                         col_meta.markdown("**Seed**")
                         col_meta.code(str(entry.get("seed")), language="text")
 
-                    col_meta.download_button(
-                        label="画像をダウンロード",
-                        data=img_bytes,
-                        file_name=f"result_{entry.get('prompt_id','unknown')}_{img_idx}.png",
-                        mime="image/png",
-                        key=f"download_{entry.get('prompt_id','unknown')}_{img_idx}",
-                    )
+                    if img_bytes:
+                        col_meta.download_button(
+                            label="画像をダウンロード",
+                            data=img_bytes,
+                            file_name=f"result_{entry.get('prompt_id','unknown')}_{img_idx}.png",
+                            mime="image/png",
+                            key=f"download_{entry.get('prompt_id','unknown')}_{img_idx}",
+                        )
 
             elif status == "running":
                 st.info("生成中... 履歴に画像が反映されるまでお待ちください")
@@ -346,13 +381,15 @@ def _recover_running_job_history() -> None:
         job_id = entry.get("job_id") or prompt_id
         try:
             result = asyncio.run(_fetch_existing_result(prompt_id, timeout=1.5, fast=True))
+            # 画像をsession_stateに保存し、IDを取得
+            image_ids = [_store_image(img.data) for img in result.images]
             _upsert_history(
                 job_id,
                 {
                     "positive_prompt": entry.get("positive_prompt", ""),
                     "negative_prompt": entry.get("negative_prompt", ""),
                     "seed": entry.get("seed"),
-                    "images": [storage_manager.encode_image(img.data) for img in result.images],
+                    "images": image_ids,
                     "prompt_id": result.prompt_id,
                     "status": "success",
                     "completed_at": _current_timestamp(),
@@ -479,13 +516,15 @@ def _process_job_queue() -> None:
 
             _display_results(result)
 
+            # 画像をsession_stateに保存し、IDを取得
+            image_ids = [_store_image(img.data) for img in result.images]
             _upsert_history(
                 job["id"],
                 {
                     "positive_prompt": job["positive_prompt"],
                     "negative_prompt": job["negative_prompt"],
                     "seed": job["seed"],
-                    "images": [storage_manager.encode_image(img.data) for img in result.images],
+                    "images": image_ids,
                     "prompt_id": result.prompt_id,
                     "status": "success",
                     "completed_at": _current_timestamp(),
@@ -557,6 +596,10 @@ def main() -> None:
     session_manager.initialize()
     session_manager.sync_from_local_storage()
 
+    if CONFIGS.log_level in ["DEBUG", "TRACE"]:
+        st.write("Debug - jobs:", st.session_state.get("jobs", []))
+        st.write("Debug - history:", st.session_state.get("history", []))
+
     theme_mode = "dark"
     _apply_theme(theme_mode)
 
@@ -626,8 +669,17 @@ def main() -> None:
     with col_right:
         _display_history()
 
-    # セッション終了時にLocalStorageに保存
-    session_manager.sync_to_local_storage()
+    # LocalStorageへの同期（rerun前に確実に実行）
+    client_id = _get_client_id()
+    if st.session_state.get("history_needs_sync"):
+        history = st.session_state.get("history", [])
+        STORAGE_MANAGER.set(f"history_{client_id}", history)
+        st.session_state["history_needs_sync"] = False
+
+    if st.session_state.get("jobs_needs_sync"):
+        jobs = st.session_state.get("jobs", [])
+        STORAGE_MANAGER.set(f"jobs_{client_id}", jobs)
+        st.session_state["jobs_needs_sync"] = False
 
 if __name__ == "__main__":
     main()

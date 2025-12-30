@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from typing import Any
 
@@ -21,6 +20,7 @@ class LocalStorageManager:
         """
         Args:
             key_prefix: LocalStorageのキーに使用するプレフィックス
+            use_compression: zstd圧縮を使用するか
         """
         self.key_prefix = key_prefix
         self._cache: dict[str, Any] = {}  # 読み込みキャッシュ
@@ -29,19 +29,21 @@ class LocalStorageManager:
         """LocalStorageのキー名を生成"""
         return f"{self.key_prefix}{name}"
 
-    def get(self, name: str, default: Any = None) -> Any:
+    def get(self, name: str, default: Any = None, use_cache: bool = True) -> Any:
         """LocalStorageから値を取得
 
         Args:
             name: キー名（プレフィックスは自動付与）
             default: 値が存在しない場合のデフォルト値
+            use_cache: キャッシュを使用するか
 
         Returns:
             LocalStorageから取得した値（JSON parse済み）
         """
-        # キャッシュをチェック
         cache_key = self._make_key(name)
-        if cache_key in self._cache:
+
+        # キャッシュをチェック（use_cache=Trueの場合のみ）
+        if use_cache and cache_key in self._cache:
             return self._cache[cache_key]
 
         key = self._make_key(name)
@@ -81,13 +83,10 @@ class LocalStorageManager:
         json_value = json.dumps(value, ensure_ascii=False)
         # エスケープ処理: シングルクォートとバックスラッシュ
         escaped_value = json_value.replace("\\", "\\\\").replace("'", "\\'")
-
         js_expr = f"""
         (() => {{
             try {{
-                const key = '{key}';
-                const value = '{escaped_value}';
-                window.localStorage.setItem(key, value);
+                window.localStorage.setItem('{key}', '{escaped_value}');
                 return true;
             }} catch (e) {{
                 console.error('LocalStorage set error:', e);
@@ -99,11 +98,12 @@ class LocalStorageManager:
         js_key = f"ls_set_{name}_{ULID()}"
         result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
-        # キャッシュを更新
+        # JSが成功した場合のみキャッシュを更新
         if result is True:
             self._cache[key] = value
+            return True
 
-        return result is True
+        return False
 
     def remove(self, name: str) -> bool:
         """LocalStorageから値を削除
@@ -136,28 +136,5 @@ class LocalStorageManager:
 
         return result is True
 
-    def encode_image(self, image_bytes: bytes) -> str:
-        """画像バイトデータをbase64エンコード
-
-        Args:
-            image_bytes: 画像のバイトデータ
-
-        Returns:
-            base64エンコードされた文字列
-        """
-        return base64.b64encode(image_bytes).decode("utf-8")
-
-    def decode_image(self, encoded_str: str) -> bytes:
-        """base64エンコードされた画像データをデコード
-
-        Args:
-            encoded_str: base64エンコードされた文字列
-
-        Returns:
-            画像のバイトデータ
-        """
-        return base64.b64decode(encoded_str)
-
-
 # グローバルインスタンス
-storage_manager = LocalStorageManager()
+STORAGE_MANAGER = LocalStorageManager()
