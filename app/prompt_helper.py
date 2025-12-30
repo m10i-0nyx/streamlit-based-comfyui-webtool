@@ -85,7 +85,7 @@ def render_prompt_input_with_tags(
     with cols[1]:
         st.write("")  # 高さ調整用
         st.write("")  # 高さ調整用
-        if st.button("🗑️ クリア検索", key=f"{key}_clear_search_btn"):
+        if st.button("🗑️ クリア", key=f"{key}_clear_search_btn"):
             st.session_state[clear_search_flag] = True
             st.rerun()
 
