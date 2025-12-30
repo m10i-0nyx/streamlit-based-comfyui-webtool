@@ -746,7 +746,7 @@ def main() -> None:
                         "prompt_id": None,
                     }
                 )
-                st.rerun()
+                # rerunは不要 - _process_job_queue()が自動的に実行される
 
         _process_job_queue()
 

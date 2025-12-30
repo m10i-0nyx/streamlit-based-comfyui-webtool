@@ -21,10 +21,8 @@ class LocalStorageManager:
         """
         Args:
             key_prefix: LocalStorageのキーに使用するプレフィックス
-            use_compression: zstd圧縮を使用するか
         """
         self.key_prefix = key_prefix
-        self._cache: dict[str, Any] = {}  # 読み込みキャッシュ
         self._log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
     def _make_key(self, name: str) -> str:
@@ -37,17 +35,11 @@ class LocalStorageManager:
         Args:
             name: キー名（プレフィックスは自動付与）
             default: 値が存在しない場合のデフォルト値
-            use_cache: キャッシュを使用するか
+            use_cache: 使用されない（互換性のため残す）
 
         Returns:
             LocalStorageから取得した値（JSON parse済み）
         """
-        cache_key = self._make_key(name)
-
-        # キャッシュをチェック（use_cache=Trueの場合のみ）
-        if use_cache and cache_key in self._cache:
-            return self._cache[cache_key]
-
         key = self._make_key(name)
         js_expr = f"""
         (() => {{
@@ -61,32 +53,23 @@ class LocalStorageManager:
         }})()
         """
 
-        # use_cacheがFalseの場合、session_state内のカウンターを使ってキーを生成
-        # これにより、同じレンダリングサイクル内では同じキーが使われる
-        if not use_cache:
-            if f"_ls_counter_{name}" not in st.session_state:
-                st.session_state[f"_ls_counter_{name}"] = 0
-            counter = st.session_state[f"_ls_counter_{name}"]
-            js_key = f"ls_get_{name}_{counter}"
-        else:
-            js_key = f"ls_get_{name}"
+        # session_state内のカウンターを使って固定キーを生成
+        # sync_from_local_storage()で設定されるカウンターを使用
+        if f"_ls_counter_{name}" not in st.session_state:
+            st.session_state[f"_ls_counter_{name}"] = 1
+        counter = st.session_state[f"_ls_counter_{name}"]
+        js_key = f"ls_get_{name}_{counter}"
 
         json_str = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
         # JSONパースをPython側で実行
         if json_str is None or json_str == "":
-            final_result = default
-        else:
-            try:
-                final_result = json.loads(json_str)
-            except (json.JSONDecodeError, TypeError):
-                final_result = default
+            return default
 
-        # use_cacheがTrueの場合のみキャッシュに保存
-        if use_cache:
-            self._cache[cache_key] = final_result
-
-        return final_result
+        try:
+            return json.loads(json_str)
+        except (json.JSONDecodeError, TypeError):
+            return default
 
     def set(self, name: str, value: Any) -> bool:
         """LocalStorageに値を保存
@@ -123,12 +106,7 @@ class LocalStorageManager:
 
         result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
-        # JSが成功した場合のみキャッシュを更新
-        if result is True:
-            self._cache[key] = value
-            return True
-
-        return False
+        return result is True
 
     def remove(self, name: str) -> bool:
         """LocalStorageから値を削除
@@ -160,10 +138,6 @@ class LocalStorageManager:
         js_key = f"ls_remove_{name}_{counter}"
 
         result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
-
-        # キャッシュから削除
-        if result is True and key in self._cache:
-            del self._cache[key]
 
         return result is True
 
