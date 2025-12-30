@@ -1,0 +1,32 @@
+{
+    "nodes": {
+        "1": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": "{{seed}}",
+                "width": "{{width}}",
+                "height": "{{height}}"
+            }
+        },
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": "{{positive_prompt}}",
+                "clip": [
+                    "3",
+                    0
+                ]
+            }
+        },
+        "4": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": "{{negative_prompt}}",
+                "clip": [
+                    "3",
+                    0
+                ]
+            }
+        }
+    }
+}
