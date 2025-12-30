@@ -28,15 +28,15 @@ class SessionManager:
         Returns:
             クライアントID（ULID形式）
         """
-        # 既に確認済みの場合は即座に返す
-        if st.session_state.get("client_id_confirmed"):
+        # 既に確認済みの場合は即座に返す（JavaScriptを再実行しない）
+        if st.session_state.get("client_id_confirmed") and st.session_state.get("client_id"):
             return st.session_state["client_id"]
 
         # 候補IDを用意
         candidate_id = st.session_state.get("client_id_seed") or str(ULID())
         st.session_state["client_id_seed"] = candidate_id
 
-        # LocalStorageからIDを取得または設定
+        # LocalStorageからIDを取得または設定（初回のみ）
         js_expr = f"""
         (() => {{
             const key = '{cls.LOCAL_STORAGE_CLIENT_KEY}';
@@ -57,7 +57,7 @@ class SessionManager:
 
         final_id = str(stored_id or candidate_id)
         st.session_state["client_id"] = final_id
-        st.session_state["client_id_confirmed"] = stored_id is not None
+        st.session_state["client_id_confirmed"] = True  # 確実にフラグを立てる
 
         return final_id
 
@@ -93,34 +93,47 @@ class SessionManager:
 
         ブラウザリロード時などに、LocalStorageに保存された
         ジョブキューと履歴をセッション状態に読み込みます。
+        一度だけ実行されます。
         """
+        # 既に読み込み済みの場合はスキップ
+        if st.session_state.get("localstorage_loaded"):
+            return
+
         client_id = cls.get_client_id()
 
         # ジョブキューを読み込み
-        if "jobs" not in st.session_state or not st.session_state["jobs"]:
+        if "jobs" not in st.session_state:
             jobs = storage_manager.get(f"jobs_{client_id}", default=[])
             st.session_state["jobs"] = jobs
 
         # 履歴を読み込み
-        if "history" not in st.session_state or not st.session_state["history"]:
+        if "history" not in st.session_state:
             history = storage_manager.get(f"history_{client_id}", default=[])
             st.session_state["history"] = history
+
+        # 読み込み完了フラグ
+        st.session_state["localstorage_loaded"] = True
 
     @classmethod
     def sync_to_local_storage(cls) -> None:
         """セッション状態からLocalStorageに同期
 
         現在のジョブキューと履歴をLocalStorageに保存します。
+        dirtyフラグが立っている場合のみ保存を実行します。
         """
         client_id = cls.get_client_id()
 
-        # ジョブキューを保存
-        jobs = st.session_state.get("jobs", [])
-        storage_manager.set(f"jobs_{client_id}", jobs)
+        # ジョブキューを保存（dirtyフラグがある場合のみ）
+        if st.session_state.get("jobs_dirty"):
+            jobs = st.session_state.get("jobs", [])
+            storage_manager.set(f"jobs_{client_id}", jobs)
+            st.session_state["jobs_dirty"] = False
 
-        # 履歴を保存
-        history = st.session_state.get("history", [])
-        storage_manager.set(f"history_{client_id}", history)
+        # 履歴を保存（dirtyフラグがある場合のみ）
+        if st.session_state.get("history_dirty"):
+            history = st.session_state.get("history", [])
+            storage_manager.set(f"history_{client_id}", history)
+            st.session_state["history_dirty"] = False
 
     @classmethod
     def clear_local_storage(cls) -> None:

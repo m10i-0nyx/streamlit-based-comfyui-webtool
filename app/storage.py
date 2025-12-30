@@ -23,6 +23,7 @@ class LocalStorageManager:
             key_prefix: LocalStorageのキーに使用するプレフィックス
         """
         self.key_prefix = key_prefix
+        self._cache: dict[str, Any] = {}  # 読み込みキャッシュ
 
     def _make_key(self, name: str) -> str:
         """LocalStorageのキー名を生成"""
@@ -38,6 +39,11 @@ class LocalStorageManager:
         Returns:
             LocalStorageから取得した値（JSON parse済み）
         """
+        # キャッシュをチェック
+        cache_key = self._make_key(name)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
         key = self._make_key(name)
         js_expr = f"""
         (() => {{
@@ -55,7 +61,11 @@ class LocalStorageManager:
         js_key = f"ls_get_{name}_{ULID()}"
         result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
-        return result if result is not None else default
+        # 結果をキャッシュ
+        final_result = result if result is not None else default
+        self._cache[cache_key] = final_result
+
+        return final_result
 
     def set(self, name: str, value: Any) -> bool:
         """LocalStorageに値を保存
@@ -89,6 +99,10 @@ class LocalStorageManager:
         js_key = f"ls_set_{name}_{ULID()}"
         result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
+        # キャッシュを更新
+        if result is True:
+            self._cache[key] = value
+
         return result is True
 
     def remove(self, name: str) -> bool:
@@ -115,6 +129,10 @@ class LocalStorageManager:
 
         js_key = f"ls_remove_{name}_{ULID()}"
         result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
+
+        # キャッシュから削除
+        if result is True and key in self._cache:
+            del self._cache[key]
 
         return result is True
 

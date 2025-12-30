@@ -61,19 +61,17 @@ def _get_client_id() -> str:
 
 
 def _get_jobs() -> list[dict[str, Any]]:
-    """LocalStorageからジョブキューを取得"""
+    """ジョブキューを取得（session_stateから）"""
     if "jobs" not in st.session_state:
-        client_id = _get_client_id()
-        jobs = storage_manager.get(f"jobs_{client_id}", default=[])
-        st.session_state["jobs"] = jobs
+        st.session_state["jobs"] = []
     return st.session_state["jobs"]
 
 
 def _set_jobs(jobs: list[dict[str, Any]]) -> None:
-    """ジョブキューをLocalStorageに保存"""
+    """ジョブキューを保存（バッチ処理用フラグで制御）"""
     st.session_state["jobs"] = jobs
-    client_id = _get_client_id()
-    storage_manager.set(f"jobs_{client_id}", jobs)
+    # 保存フラグを立てる（実際の保存はsync_to_local_storage()で行う）
+    st.session_state["jobs_dirty"] = True
 
 
 def _running_jobs_count() -> int:
@@ -142,19 +140,16 @@ def _release_running_slot() -> None:
 
 
 def _get_history() -> list[dict[str, Any]]:
-    """LocalStorageから履歴を取得"""
+    """履歴を取得（session_stateから）"""
     if "history" not in st.session_state:
-        client_id = _get_client_id()
-        history = storage_manager.get(f"history_{client_id}", default=[])
-        st.session_state["history"] = history
+        st.session_state["history"] = []
     return st.session_state["history"]
 
 
 def _save_history() -> None:
-    """履歴をLocalStorageに保存"""
-    client_id = _get_client_id()
-    history = st.session_state.get("history", [])
-    storage_manager.set(f"history_{client_id}", history)
+    """履歴をLocalStorageに保存（バッチ処理用フラグで制御）"""
+    # 保存フラグを立てる（実際の保存はsync_to_local_storage()で行う）
+    st.session_state["history_dirty"] = True
 
 
 def _append_history(entry: dict[str, Any]) -> None:
@@ -630,6 +625,9 @@ def main() -> None:
 
     with col_right:
         _display_history()
+
+    # セッション終了時にLocalStorageに保存
+    session_manager.sync_to_local_storage()
 
 if __name__ == "__main__":
     main()
