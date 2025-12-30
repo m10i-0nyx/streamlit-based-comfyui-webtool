@@ -83,8 +83,10 @@ class SessionManager:
         """LocalStorageからセッション状態に同期
 
         ブラウザリロード時などに、LocalStorageに保存された
-        ジョブキューと履歴をセッション状態に読み込みます。
+        履歴をセッション状態に読み込みます。
         一度だけ実行されます。
+
+        注: ジョブキューはsession_stateのみで管理され、LocalStorageには保存されません。
         """
         # 既に読み込み成功している場合はスキップ
         if st.session_state.get("localstorage_loaded"):
@@ -94,26 +96,23 @@ class SessionManager:
         if "_ls_sync_attempt" not in st.session_state:
             st.session_state["_ls_sync_attempt"] = 1
             # カウンターを更新（STORAGE_MANAGERが使用）
-            for key in ["jobs", "history"]:
-                st.session_state[f"_ls_counter_{key}"] = 1
+            st.session_state["_ls_counter_history"] = 1
 
-        # ジョブキューを読み込み（強制上書き、キャッシュバイパス）
-        jobs = STORAGE_MANAGER.get("jobs", default=None, use_cache=False)
+        # ジョブキューは常に空で初期化（LocalStorageから読み込まない）
+        if "jobs" not in st.session_state:
+            st.session_state["jobs"] = []
 
         # 履歴を読み込み（強制上書き、キャッシュバイパス）
         history = STORAGE_MANAGER.get("history", default=None, use_cache=False)
 
         # streamlit_js_evalが初回レンダリング時にNoneを返すため、
         # データが取得できるまで読み込み完了フラグを立てない
-        if jobs is not None and history is not None:
-            st.session_state["jobs"] = jobs if isinstance(jobs, list) else []
+        if history is not None:
             st.session_state["history"] = history if isinstance(history, list) else []
             # 読み込み完了フラグ
             st.session_state["localstorage_loaded"] = True
         else:
             # データ取得失敗時は初期値を設定し、次回再試行
-            if "jobs" not in st.session_state:
-                st.session_state["jobs"] = []
             if "history" not in st.session_state:
                 st.session_state["history"] = []
 
@@ -128,17 +127,13 @@ class SessionManager:
     def sync_to_local_storage(cls) -> None:
         """セッション状態からLocalStorageに同期
 
-        現在のジョブキューと履歴をLocalStorageに保存します。
+        現在の履歴をLocalStorageに保存します。
+
+        注: ジョブキューはLocalStorageに保存されません。
         """
-        client_id = cls.get_client_id()
-
-        # ジョブキューを保存
-        jobs = st.session_state.get("jobs", [])
-        STORAGE_MANAGER.set(f"jobs", jobs)
-
         # 履歴を保存
         history = st.session_state.get("history", [])
-        STORAGE_MANAGER.set(f"history", history)
+        STORAGE_MANAGER.set("history", history)
 
     @classmethod
     def clear_local_storage(cls) -> None:
@@ -147,9 +142,7 @@ class SessionManager:
         デバッグやテスト用に、ユーザーのLocalStorageを
         クリアします。
         """
-        client_id = cls.get_client_id()
-        STORAGE_MANAGER.remove(f"jobs")
-        STORAGE_MANAGER.remove(f"history")
+        STORAGE_MANAGER.remove("history")
 
         # セッション状態もクリア
         st.session_state["jobs"] = []

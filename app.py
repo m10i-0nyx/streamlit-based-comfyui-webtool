@@ -107,9 +107,8 @@ def _get_jobs() -> list[dict[str, Any]]:
 
 
 def _set_jobs(jobs: list[dict[str, Any]]) -> None:
-    """ジョブキューの変更をマーク（実際の保存はmain()の最後で行う）"""
+    """ジョブキューを設定（session_stateのみで管理）"""
     st.session_state["jobs"] = jobs
-    st.session_state["jobs_needs_sync"] = True
 
 
 def _running_jobs_count() -> int:
@@ -782,41 +781,47 @@ def main() -> None:
         # Type narrowing for selectbox return value
         if selected_size is None:
             selected_size = size_options[0]
-        selected_width, selected_height = map(int, selected_size.split("x"))
+
+        # サイズ値のパースと検証（インジェクション対策）
+        try:
+            selected_width, selected_height = map(int, selected_size.split("x"))
+            # 許可された値のリストに含まれているかチェック
+            if selected_width not in CONFIGS.width_list or selected_height not in CONFIGS.height_list:
+                st.error(f"不正な画像サイズが指定されました: {selected_width}x{selected_height}")
+                st.stop()
+        except (ValueError, AttributeError) as e:
+            st.error(f"画像サイズの形式が不正です: {selected_size}")
+            st.stop()
 
         seed_value = st.number_input(
             "シード値 (-1 の場合はランダム)", min_value=-1, step=1, value=-1, max_value=2**31 - 1
         )
 
-        # ジョブ実行中はボタンを無効化して連打を防止
-        is_generating = _running_jobs_count() >= 1
+        if st.button("画像を生成する", type="primary"):
+            if CONFIGS.global_max_active_requests > 0:
+                counters, lock = _global_state()
+                with lock:
+                    if counters["running"] >= CONFIGS.global_max_active_requests:
+                        st.error("システム全体の同時実行上限に達しています。完了をお待ちください。")
+                        st.stop()
 
-        if st.button("画像を生成する", type="primary", disabled=is_generating):
-            if _running_jobs_count() >= 1:
-                st.error("1ユーザあたりの同時リクエスト上限に達しました。完了をお待ちください。")
-            else:
-                if CONFIGS.global_max_active_requests > 0:
-                    counters, lock = _global_state()
-                    with lock:
-                        if counters["running"] >= CONFIGS.global_max_active_requests:
-                            st.error("システム全体の同時実行上限に達しています。完了をお待ちください。")
-                            st.stop()
-
-                job_id = str(ULID())
-                chosen_seed = _random_seed() if int(seed_value) < 0 else int(seed_value)
-                _add_job(
-                    {
-                        "id": job_id,
-                        "status": "queued",
-                        "positive_prompt": positive_prompt,
-                        "negative_prompt": negative_prompt,
-                        "seed": chosen_seed,
-                        "width": selected_width,
-                        "height": selected_height,
-                        "prompt_id": None,
-                    }
-                )
-                # rerunは不要 - _process_job_queue()が自動的に実行される
+            job_id = str(ULID())
+            chosen_seed = _random_seed() if int(seed_value) < 0 else int(seed_value)
+            _add_job(
+                {
+                    "id": job_id,
+                    "status": "queued",
+                    "positive_prompt": positive_prompt,
+                    "negative_prompt": negative_prompt,
+                    "seed": chosen_seed,
+                    "width": selected_width,
+                    "height": selected_height,
+                    "prompt_id": None,
+                }
+            )
+            st.success(f"キューに追加しました (Seed: {chosen_seed})")
+            # ジョブを追加したらrerunして状態を保存
+            st.rerun()
 
         _process_job_queue()
 
@@ -829,14 +834,8 @@ def main() -> None:
         STORAGE_MANAGER.set(f"history", history)
         st.session_state["history_needs_sync"] = False
 
-    if st.session_state.get("jobs_needs_sync"):
-        jobs = st.session_state.get("jobs", [])
-        STORAGE_MANAGER.set(f"jobs", jobs)
-        st.session_state["jobs_needs_sync"] = False
-
     if CONFIGS.log_level in ["TRACE", "DEBUG"]:
         st.write("Debug - localstorage_loaded:", st.session_state.get("localstorage_loaded"))
-        st.write("Debug - jobs:", st.session_state.get("jobs", []))
         st.write("Debug - history:", st.session_state.get("history", []))
 
 if __name__ == "__main__":
