@@ -206,6 +206,22 @@ def _upsert_history(job_id: str, data: dict[str, Any]) -> None:
     _save_history()
 
 
+def _delete_history_entry(job_id: str) -> None:
+    """指定したjob_idの履歴エントリを削除"""
+    history = _get_history()
+    filtered = [entry for entry in history if entry.get("job_id") != job_id]
+    st.session_state["history"] = filtered
+    _save_history()
+
+
+def _clear_all_history() -> None:
+    """全ての履歴を削除"""
+    st.session_state["history"] = []
+    _save_history()
+    # 画像ストアもクリア
+    st.session_state["images_store"] = {}
+
+
 def _apply_theme(mode: str) -> None:
     if mode == "dark":
         base_bg = "#0b1221"
@@ -326,18 +342,38 @@ def _try_restore_images_from_prompt_id(entry: dict[str, Any]) -> bool:
 
 def _display_history() -> None:
     history = list(reversed(_get_history()))
-    st.caption("過去の生成結果")
+
+    # ヘッダー行：タイトルと全削除ボタン
+    col_title, col_delete_all = st.columns([4, 1])
+    with col_title:
+        st.caption("過去の生成結果")
+    with col_delete_all:
+        if history:
+            if st.button("🗑️ Delete All", key="delete_all_history", help="全ての履歴を削除"):
+                _clear_all_history()
+                st.rerun()
+
     if not history:
         st.info("まだ履歴がありません。生成するとここに表示されます。")
         return
+
     for idx, entry in enumerate(history, start=1):
         status = entry.get("status", "running")
+        job_id = entry.get("job_id", entry.get("prompt_id", f"unknown_{idx}"))
         header = f"#{idx} [{status}]"
+
         with st.expander(header, expanded=True if status == "success" else False):
-            if entry.get("prompt_id"):
-                st.caption(f"prompt_id: {entry['prompt_id']}")
-            if entry.get("completed_at"):
-                st.caption(f"完了日時: {entry['completed_at']}")
+            # 削除ボタンをexpanderの中に配置
+            col_info, col_delete = st.columns([10, 1])
+            with col_info:
+                if entry.get("prompt_id"):
+                    st.caption(f"prompt_id: {entry['prompt_id']}")
+                if entry.get("completed_at"):
+                    st.caption(f"完了日時: {entry['completed_at']}")
+            with col_delete:
+                if st.button("🗑️", key=f"delete_{job_id}_{idx}", help="この履歴を削除"):
+                    _delete_history_entry(job_id)
+                    st.rerun()
 
             if status == "success":
                 # 画像が存在しない場合、prompt_idから復元を試みる
@@ -648,10 +684,6 @@ def main() -> None:
     SESSION_MANAGER.initialize()
     SESSION_MANAGER.sync_from_local_storage()
 
-    if CONFIGS.log_level in ["TRACE"]:
-        st.write("Debug - jobs:", st.session_state.get("jobs", []))
-        st.write("Debug - history:", st.session_state.get("history", []))
-
     theme_mode = "dark"
     _apply_theme(theme_mode)
 
@@ -731,6 +763,11 @@ def main() -> None:
         jobs = st.session_state.get("jobs", [])
         STORAGE_MANAGER.set(f"jobs", jobs)
         st.session_state["jobs_needs_sync"] = False
+
+    if CONFIGS.log_level in ["TRACE", "DEBUG"]:
+        st.write("Debug - localstorage_loaded:", st.session_state.get("localstorage_loaded"))
+        #st.write("Debug - jobs:", st.session_state.get("jobs", []))
+        st.write("Debug - history:", st.session_state.get("history", []))
 
 if __name__ == "__main__":
     main()

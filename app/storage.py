@@ -10,6 +10,7 @@ import json
 import os
 from typing import Any
 
+import streamlit as st
 from streamlit_js_eval import streamlit_js_eval
 
 
@@ -60,11 +61,17 @@ class LocalStorageManager:
         }})()
         """
 
-        # ユニークなキーを生成してキャッシュを回避
-        js_key = f"ls_get_{name}"
-        # TRACEレベルの時のみログを表示
-        want_output = self._log_level == "TRACE"
-        json_str = streamlit_js_eval(js_expressions=js_expr, key=js_key, want_output=want_output)
+        # use_cacheがFalseの場合、session_state内のカウンターを使ってキーを生成
+        # これにより、同じレンダリングサイクル内では同じキーが使われる
+        if not use_cache:
+            if f"_ls_counter_{name}" not in st.session_state:
+                st.session_state[f"_ls_counter_{name}"] = 0
+            counter = st.session_state[f"_ls_counter_{name}"]
+            js_key = f"ls_get_{name}_{counter}"
+        else:
+            js_key = f"ls_get_{name}"
+
+        json_str = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
         # JSONパースをPython側で実行
         if json_str is None or json_str == "":
@@ -75,8 +82,9 @@ class LocalStorageManager:
             except (json.JSONDecodeError, TypeError):
                 final_result = default
 
-        # 結果をキャッシュ
-        self._cache[cache_key] = final_result
+        # use_cacheがTrueの場合のみキャッシュに保存
+        if use_cache:
+            self._cache[cache_key] = final_result
 
         return final_result
 
@@ -106,10 +114,14 @@ class LocalStorageManager:
         }})()
         """
 
-        js_key = f"ls_set_{name}"
-        # TRACEレベルの時のみログを表示
-        want_output = self._log_level == "TRACE"
-        result = streamlit_js_eval(js_expressions=js_expr, key=js_key, want_output=want_output)
+        # session_state内のカウンターを使ってユニークキーを生成
+        if f"_ls_set_counter_{name}" not in st.session_state:
+            st.session_state[f"_ls_set_counter_{name}"] = 0
+        st.session_state[f"_ls_set_counter_{name}"] += 1
+        counter = st.session_state[f"_ls_set_counter_{name}"]
+        js_key = f"ls_set_{name}_{counter}"
+
+        result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
         # JSが成功した場合のみキャッシュを更新
         if result is True:
@@ -140,10 +152,14 @@ class LocalStorageManager:
         }})()
         """
 
-        js_key = f"ls_remove_{name}"
-        # TRACEレベルの時のみログを表示
-        want_output = self._log_level == "TRACE"
-        result = streamlit_js_eval(js_expressions=js_expr, key=js_key, want_output=want_output)
+        # session_state内のカウンターを使ってユニークキーを生成
+        if f"_ls_remove_counter_{name}" not in st.session_state:
+            st.session_state[f"_ls_remove_counter_{name}"] = 0
+        st.session_state[f"_ls_remove_counter_{name}"] += 1
+        counter = st.session_state[f"_ls_remove_counter_{name}"]
+        js_key = f"ls_remove_{name}_{counter}"
+
+        result = streamlit_js_eval(js_expressions=js_expr, key=js_key)
 
         # キャッシュから削除
         if result is True and key in self._cache:

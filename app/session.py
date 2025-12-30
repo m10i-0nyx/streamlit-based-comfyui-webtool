@@ -90,6 +90,15 @@ class SessionManager:
         if st.session_state.get("localstorage_loaded"):
             return
 
+        # カウンターをインクリメントして、新しい読み込みを実行
+        if "_ls_sync_attempt" not in st.session_state:
+            st.session_state["_ls_sync_attempt"] = 0
+        st.session_state["_ls_sync_attempt"] += 1
+
+        # カウンターを更新（STORAGE_MANAGERが使用）
+        for key in ["jobs", "history"]:
+            st.session_state[f"_ls_counter_{key}"] = st.session_state["_ls_sync_attempt"]
+
         # ジョブキューを読み込み（強制上書き、キャッシュバイパス）
         jobs = STORAGE_MANAGER.get("jobs", default=None, use_cache=False)
 
@@ -104,11 +113,14 @@ class SessionManager:
             # 読み込み完了フラグ
             st.session_state["localstorage_loaded"] = True
         else:
-            # データ取得失敗時は初期値を設定し、次回リトライ
+            # データ取得失敗時は初期値を設定
             if "jobs" not in st.session_state:
                 st.session_state["jobs"] = []
             if "history" not in st.session_state:
                 st.session_state["history"] = []
+            # 3回試行してもダメなら諦めて空配列として扱う
+            if st.session_state["_ls_sync_attempt"] >= 3:
+                st.session_state["localstorage_loaded"] = True
 
     @classmethod
     def sync_to_local_storage(cls) -> None:
