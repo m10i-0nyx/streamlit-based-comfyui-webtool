@@ -345,7 +345,14 @@ def _try_restore_images_from_prompt_id(entry: dict[str, Any]) -> bool:
         return False
 
 
+@st.fragment(run_every="10s")
+def _display_history_fragment() -> None:
+    """履歴表示フラグメント（10秒ごとに自動更新）"""
+    _display_history()
+
+
 def _display_history() -> None:
+    """履歴表示（Fragment内で呼び出される）"""
     history = list(reversed(_get_history()))
 
     # ヘッダー行：タイトルと全削除ボタン
@@ -716,14 +723,6 @@ def main() -> None:
     # 実行中ジョブの履歴復元
     _recover_running_job_history()
 
-    # Auto-refresh every 10s while there are running entries with prompt_id to pick up completions.
-    history_snapshot = _get_history()
-    if any(h.get("status") == "running" and h.get("prompt_id") for h in history_snapshot):
-        st.markdown(
-            "<meta http-equiv='refresh' content='10'>",
-            unsafe_allow_html=True,
-        )
-
     col_left, col_right = st.columns(2)
 
     with col_left:
@@ -823,7 +822,7 @@ def main() -> None:
         _process_job_queue()
 
     with col_right:
-        _display_history()
+        _display_history_fragment()
 
     # LocalStorageへの同期（rerun前に確実に実行）
     if st.session_state.get("history_needs_sync"):
