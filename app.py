@@ -13,6 +13,10 @@ from ulid import ULID
 
 from app.comfy_client import ComfyUIClient, GenerationResult
 from app.config import load_config
+from app.prompt_helper import (
+    render_negative_prompt_presets,
+    render_prompt_input_with_tags,
+)
 from app.session import SESSION_MANAGER
 from app.storage import STORAGE_MANAGER
 from app.workflow import WorkflowTemplateError, load_workflow, render_workflow
@@ -725,18 +729,37 @@ def main() -> None:
     with col_left:
         st.caption("プロンプト/ネガティブ/シードのみ編集可能なComfyUIクライアント")
 
-        positive_prompt = st.text_area(
-            "プロンプト(描画したい内容を入力)",
+        # タグ支援機能付きプロンプト入力
+        positive_prompt = render_prompt_input_with_tags(
+            label="プロンプト(描画したい内容を入力)",
+            key="positive_prompt",
+            default_value="pikachu, best quality",
             height=160,
-            placeholder="描画したい内容を入力",
-            value="Pikachu",
+            help_text="カンマ区切りでタグを入力してください。タグ検索機能も利用できます。",
         )
-        negative_prompt = st.text_area(
-            "ネガティブプロンプト(除外したい内容を入力)",
-            height=120,
-            placeholder="除外したい内容を入力",
-            value="lowres, bad anatomy, error, missing fingers",
-        )
+
+        # ネガティブプロンプトプリセット選択
+        negative_preset = render_negative_prompt_presets("negative_preset")
+
+        # ネガティブプロンプト入力（プリセットが選択されていればその値を使用）
+        if negative_preset is not None:
+            # プリセットが選択された場合
+            negative_prompt = st.text_area(
+                "ネガティブプロンプト(除外したい内容を入力)",
+                height=120,
+                placeholder="除外したい内容を入力",
+                value=negative_preset,
+                key="negative_prompt_input",
+            )
+        else:
+            # カスタムの場合はタグ支援機能付き
+            negative_prompt = render_prompt_input_with_tags(
+                label="ネガティブプロンプト(除外したい内容を入力)",
+                key="negative_prompt",
+                default_value="lowres, bad anatomy, error, missing fingers",
+                height=120,
+                help_text="除外したいタグをカンマ区切りで入力してください。",
+            )
 
         # 画像サイズの選択
         size_options = []
