@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -192,6 +193,9 @@ def _save_history() -> None:
 def _append_history(entry: dict[str, Any]) -> None:
     """履歴に新しいエントリを追加"""
     history = _get_history()
+    # created_atタイムスタンプを追加
+    if "created_at" not in entry:
+        entry["created_at"] = int(time.time())
     history.append(entry)
     _save_history()
 
@@ -204,7 +208,10 @@ def _upsert_history(job_id: str, data: dict[str, Any]) -> None:
             entry.update(data)
             _save_history()
             return
+    # 新規作成時はcreated_atタイムスタンプを追加
     data_with_id = {**data, "job_id": job_id}
+    if "created_at" not in data_with_id:
+        data_with_id["created_at"] = int(time.time())
     history.append(data_with_id)
     _save_history()
 

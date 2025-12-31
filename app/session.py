@@ -6,10 +6,12 @@ st.session_stateとLocalStorageの連携を管理し、
 
 from __future__ import annotations
 
+import time
 import streamlit as st
 from ulid import ULID
 from streamlit_js_eval import streamlit_js_eval
 
+from app.config import load_config
 from app.storage import STORAGE_MANAGER
 
 
@@ -82,7 +84,7 @@ class SessionManager:
     def sync_from_local_storage(cls) -> None:
         """LocalStorageからセッション状態に同期
 
-        ブラウザリロード時などに、LocalStorageに保存された
+        ブラウザリロード時に、LocalStorageに保存された
         履歴をセッション状態に読み込みます。
         一度だけ実行されます。
 
@@ -108,7 +110,19 @@ class SessionManager:
         # streamlit_js_evalが初回レンダリング時にNoneを返すため、
         # データが取得できるまで読み込み完了フラグを立てない
         if history is not None:
-            st.session_state["history"] = history if isinstance(history, list) else []
+            if isinstance(history, list):
+                current_time = int(time.time())
+                # configからTTLを取得
+                configs = load_config()
+                # created_atがない、またはTTLを超過したエントリを除外
+                filtered_history = [
+                    entry for entry in history
+                    if "created_at" in entry
+                    and current_time - entry.get("created_at", 0) < configs.history_ttl
+                ]
+                st.session_state["history"] = filtered_history
+            else:
+                st.session_state["history"] = []
             # 読み込み完了フラグ
             st.session_state["localstorage_loaded"] = True
         else:
